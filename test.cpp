@@ -9,8 +9,42 @@
 #include <fstream>
 #include <sstream>
 #include <cmath>
+#include <algorithm>
 
 using namespace physx;
+
+// Camera variables
+glm::vec3 cameraPos   = glm::vec3(0.0f, 2.0f,  3.0f);
+glm::vec3 cameraFront = glm::vec3(0.0f, 0.0f, -1.0f);
+glm::vec3 cameraUp    = glm::vec3(0.0f, 1.0f,  0.0f);
+float cameraSpeed = 2.5f;
+float lastX = 400.0f;
+float lastY = 300.0f;
+float yaw = -90.0f;
+float pitch = 0.0f;
+bool firstMouse = true;
+float mouseSensitivity = 0.1f;
+
+// Physics variables
+float gravity = -9.81f;
+float jumpForce = 5.0f;
+float verticalVelocity = 0.0f;
+bool isGrounded = true;
+
+// Bullet system
+struct Bullet {
+    glm::vec3 position;
+    glm::vec3 direction;
+    float speed = 20.0f;
+    float lifetime = 3.0f;
+    float timeAlive = 0.0f;
+    bool active = false;
+};
+
+std::vector<Bullet> bullets;
+float bulletRadius = 0.1f;
+float lastShotTime = 0.0f;
+float shootCooldown = 0.5f;
 
 // PhysX global variables
 PxDefaultAllocator gAllocator;
@@ -22,62 +56,49 @@ PxScene* gScene = nullptr;
 PxMaterial* gMaterial = nullptr;
 PxPvd* gPvd = nullptr;
 
+// Cube structure and variables
 struct Cube {
     glm::vec3 position;
     PxRigidDynamic* actor;
+    bool isActive;
 };
 
 std::vector<Cube> cubes;
-
-// Function declarations
-void framebuffer_size_callback(GLFWwindow* window, int width, int height);
-void processInput(GLFWwindow *window, float deltaTime);
-GLuint loadShaders(const char * vertex_file_path, const char * fragment_file_path);
-void createFloorMesh(std::vector<float>& vertices, std::vector<unsigned int>& indices);
-void mouse_callback(GLFWwindow* window, double xpos, double ypos);
-void createSphereMesh(std::vector<float>& vertices, std::vector<unsigned int>& indices, float radius, int segments);
-void shootBullet();
-void spawnCube();
-void updatePhysics(float deltaTime);
-void initPhysX();
-void cleanupPhysX();
+const int MAX_CUBES = 50;
+const float CUBE_MASS = 1.0f;  // 1 kg
+const float CUBE_SIZE = 0.5f;  // 0.5 meters
+const float CUBE_INITIAL_SPEED = 5.0f;  // 5 m/s
+float lastCubeSpawnTime = 0.0f;
+const float CUBE_SPAWN_COOLDOWN = 1.0f;  // 1 second between spawns
 
 // Settings
 const unsigned int SCR_WIDTH = 800;
 const unsigned int SCR_HEIGHT = 600;
 
-// Basic Camera
-glm::vec3 cameraPos   = glm::vec3(0.0f, 0.0f,  3.0f);
-glm::vec3 cameraFront = glm::vec3(0.0f, 0.0f, -1.0f);
-glm::vec3 cameraUp    = glm::vec3(0.0f, 1.0f,  0.0f);
-float cameraSpeed = 2.5f; // adjust accordingly
+// Global variables
+GLFWwindow* window;
+unsigned int shaderProgram;
+unsigned int floorShaderProgram;
+unsigned int VAO, VBO, floorVAO, floorVBO, floorEBO;
+float deltaTime = 0.0f;
+float lastFrame = 0.0f;
+float fov = 45.0f;
+glm::vec3 lightPos(1.2f, 1.0f, 2.0f);
+glm::vec3 lightColor(1.0f, 1.0f, 1.0f);
+glm::vec3 cubePos(0.0f, 0.0f, 0.0f);
+PxRigidDynamic* dynamicActor = nullptr;
 
-// Add these variables at the top with other variables
-float gravity = -9.8f;
-float jumpForce = 5.0f;
-float verticalVelocity = 0.0f;
-bool isGrounded = true;
-float lastX = 400.0f;
-float lastY = 300.0f;
-float yaw = -90.0f;
-float pitch = 0.0f;
-bool firstMouse = true;
-float mouseSensitivity = 0.1f;
-
-// Bullet system
-struct Bullet {
-    glm::vec3 position;
-    glm::vec3 direction;
-    float speed = 20.0f;
-    float lifetime = 3.0f; // seconds
-    float timeAlive = 0.0f;
-    bool active = false;
-};
-
-std::vector<Bullet> bullets;
-float bulletRadius = 0.1f;
-float lastShotTime = 0.0f;
-float shootCooldown = 0.5f; // seconds between shots
+// Function declarations
+void framebuffer_size_callback(GLFWwindow* window, int width, int height);
+void processInput(GLFWwindow *window, float deltaTime);
+void mouse_callback(GLFWwindow* window, double xpos, double ypos);
+void initPhysX();
+void cleanupPhysX();
+void updatePhysics(float deltaTime);
+void spawnCube();
+GLuint loadShaders(const char* vertex_file_path, const char* fragment_file_path);
+void createFloorMesh(std::vector<float>& vertices, std::vector<unsigned int>& indices);
+void shootBullet();
 
 // Physics-related structures
 struct PhysicsObject {
@@ -119,14 +140,11 @@ const float FRICTION = 0.99f;  // Air friction coefficient
 const float FLOOR_FRICTION = 0.8f;  // Concrete-like friction
 const float AIR_RESISTANCE = 0.01f;  // Realistic air resistance
 const float FLOOR_Y = -1.0f;
-const float CUBE_SIZE = 0.1f;  // 10cm cube
-const int MAX_CUBES = 20;
 
 // Physics objects
 std::vector<PhysicsObject> physicsObjects;
 
 // Add these variables with other timing variables
-float lastCubeSpawnTime = 0.0f;
 float cubeSpawnCooldown = 0.5f;  // Half second cooldown between spawns
 
 bool checkCubeCollision(const PhysicsObject& cube1, const PhysicsObject& cube2) {
@@ -147,44 +165,47 @@ bool checkCubeCollision(const PhysicsObject& cube1, const PhysicsObject& cube2) 
 }
 
 void resolveCollision(PhysicsObject& cube1, PhysicsObject& cube2) {
-    // Calculate collision normal
+    // Calculate collision normal (direction from cube2 to cube1)
     glm::vec3 normal = glm::normalize(cube1.position - cube2.position);
     
     // Calculate relative velocity
     glm::vec3 relativeVelocity = cube1.velocity - cube2.velocity;
+    
+    // Calculate relative velocity along the normal
     float velocityAlongNormal = glm::dot(relativeVelocity, normal);
     
-    // Early out if objects are moving apart
+    // Don't resolve if objects are moving apart
     if (velocityAlongNormal > 0) return;
     
-    // Calculate collision impulse
-    float restitution = RESTITUTION;
+    // Calculate restitution (bounciness)
+    float restitution = 0.5f;
+    
+    // Calculate impulse scalar
     float j = -(1.0f + restitution) * velocityAlongNormal;
-    j /= (1.0f / cube1.mass + 1.0f / cube2.mass);
+    j /= 2.0f; // Assuming equal mass for simplicity
     
     // Apply impulse
     glm::vec3 impulse = j * normal;
-    cube1.velocity += impulse / cube1.mass;
-    cube2.velocity -= impulse / cube2.mass;
+    cube1.velocity += impulse;
+    cube2.velocity -= impulse;
     
-    // Calculate angular impulse
-    glm::vec3 contactPoint = (cube1.position + cube2.position) * 0.5f;
-    glm::vec3 r1 = contactPoint - cube1.position;
-    glm::vec3 r2 = contactPoint - cube2.position;
+    // Add angular velocity based on collision
+    glm::vec3 r1 = cube1.position - (cube1.position + cube2.position) * 0.5f;
+    glm::vec3 r2 = cube2.position - (cube1.position + cube2.position) * 0.5f;
     
-    glm::vec3 angularImpulse1 = glm::cross(r1, impulse);
-    glm::vec3 angularImpulse2 = glm::cross(r2, -impulse);
+    // Calculate torque
+    glm::vec3 torque1 = glm::cross(r1, impulse);
+    glm::vec3 torque2 = glm::cross(r2, -impulse);
     
-    cube1.angularVelocity += glm::inverse(cube1.inertiaTensor) * angularImpulse1;
-    cube2.angularVelocity += glm::inverse(cube2.inertiaTensor) * angularImpulse2;
+    // Apply angular velocity (scaled by inverse mass)
+    cube1.angularVelocity += torque1 * 0.1f;
+    cube2.angularVelocity += torque2 * 0.1f;
     
     // Separate the cubes to prevent sticking
     float overlap = (cube1.size + cube2.size) * 0.5f - glm::length(cube1.position - cube2.position);
-    if (overlap > 0) {
-        glm::vec3 separation = normal * overlap * 0.5f;
-        cube1.position += separation;
-        cube2.position -= separation;
-    }
+    glm::vec3 separation = normal * overlap * 0.5f;
+    cube1.position += separation;
+    cube2.position -= separation;
 }
 
 int main()
@@ -352,111 +373,89 @@ int main()
     glUniform3f(glGetUniformLocation(shaderProgram, "lightColor"), 1.0f, 1.0f, 1.0f);
     glUniform3f(glGetUniformLocation(shaderProgram, "objectColor"), 0.5f, 0.5f, 0.5f);
 
+    // Initialize PhysX
     initPhysX();
 
-    // Render loop
-    // -----------
-    while (!glfwWindowShouldClose(window))
-    {
-        // Per-frame time logic
-        // -------------------- 
-        float currentFrame = static_cast<float>(glfwGetTime());
+    // Main loop
+    while (!glfwWindowShouldClose(window)) {
+        // Calculate delta time
+        float currentFrame = glfwGetTime();
         deltaTime = currentFrame - lastFrame;
         lastFrame = currentFrame;
 
-        // Input
-        // -----
-        processInput(window, deltaTime); // Pass deltaTime here
+        // Process input
+        processInput(window, deltaTime);
 
-        // Update bullets
-        for (auto& bullet : bullets) {
-            if (!bullet.active) continue;
-            
-            bullet.position += bullet.direction * bullet.speed * deltaTime;
-            bullet.timeAlive += deltaTime;
-            
-            if (bullet.timeAlive >= bullet.lifetime) {
-                bullet.active = false;
-            }
-        }
+        // Clear the screen
+        glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
         // Update physics
         updatePhysics(deltaTime);
 
-        // Render
-        // ------
-        glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT); // Also clear the depth buffer!
+        // Update cube position from physics
+        if (dynamicActor) {
+            PxTransform transform = dynamicActor->getGlobalPose();
+            cubePos = glm::vec3(transform.p.x, transform.p.y, transform.p.z);
+        }
 
-        // Activate shader
-        glUseProgram(shaderProgram);
+        // Spawn new cubes
+        if (glfwGetTime() - lastCubeSpawnTime >= CUBE_SPAWN_COOLDOWN) {
+            spawnCube();
+        }
 
-        // Create transformations
-        glm::mat4 projection = glm::perspective(glm::radians(45.0f), (float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f, 100.0f);
+        // Update camera
         glm::mat4 view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
-        glm::mat4 model = glm::mat4(1.0f);
-        // You can add transformations to the model matrix here (e.g., rotation, translation)
-        // model = glm::rotate(model, (float)glfwGetTime() * glm::radians(50.0f), glm::vec3(0.5f, 1.0f, 0.0f));
-        
-        // Pass matrices to the shader
-        glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
-        glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "view"), 1, GL_FALSE, glm::value_ptr(view));
-        glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(model));
+        glm::mat4 projection = glm::perspective(glm::radians(45.0f), (float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f, 100.0f);
 
-        // In the render loop, update the viewPos uniform:
-        glUniform3f(glGetUniformLocation(shaderProgram, "viewPos"), cameraPos.x, cameraPos.y, cameraPos.z);
+        // Draw floor
+        glUseProgram(floorShaderProgram);
+        glm::mat4 floorModel = glm::mat4(1.0f);
+        floorModel = glm::translate(floorModel, glm::vec3(0.0f, -0.5f, 0.0f));
+        floorModel = glm::scale(floorModel, glm::vec3(20.0f, 0.1f, 20.0f));
+        glUniformMatrix4fv(glGetUniformLocation(floorShaderProgram, "model"), 1, GL_FALSE, &floorModel[0][0]);
+        glUniformMatrix4fv(glGetUniformLocation(floorShaderProgram, "view"), 1, GL_FALSE, &view[0][0]);
+        glUniformMatrix4fv(glGetUniformLocation(floorShaderProgram, "projection"), 1, GL_FALSE, &projection[0][0]);
+        glUniform3f(glGetUniformLocation(floorShaderProgram, "lightPos"), lightPos.x, lightPos.y, lightPos.z);
+        glUniform3f(glGetUniformLocation(floorShaderProgram, "viewPos"), cameraPos.x, cameraPos.y, cameraPos.z);
+        glUniform3f(glGetUniformLocation(floorShaderProgram, "lightColor"), lightColor.x, lightColor.y, lightColor.z);
+
+        glBindVertexArray(floorVAO);
+        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
 
         // Draw the cube
+        glUseProgram(shaderProgram);
+        glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "view"), 1, GL_FALSE, &view[0][0]);
+        glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "projection"), 1, GL_FALSE, &projection[0][0]);
+        glUniform3f(glGetUniformLocation(shaderProgram, "lightPos"), lightPos.x, lightPos.y, lightPos.z);
+        glUniform3f(glGetUniformLocation(shaderProgram, "viewPos"), cameraPos.x, cameraPos.y, cameraPos.z);
+        glUniform3f(glGetUniformLocation(shaderProgram, "lightColor"), lightColor.x, lightColor.y, lightColor.z);
+
+        glm::mat4 model = glm::mat4(1.0f);
+        model = glm::translate(model, cubePos);
+        glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "model"), 1, GL_FALSE, &model[0][0]);
+        glUniform3f(glGetUniformLocation(shaderProgram, "objectColor"), 0.8f, 0.3f, 0.3f);
         glBindVertexArray(VAO);
         glDrawArrays(GL_TRIANGLES, 0, 36);
 
         // Draw bullets
         for (const auto& bullet : bullets) {
-            if (!bullet.active) continue;
-
-            glm::mat4 bulletModel = glm::mat4(1.0f);
-            bulletModel = glm::translate(bulletModel, bullet.position);
-            bulletModel = glm::scale(bulletModel, glm::vec3(bulletRadius));
-
-            glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(bulletModel));
-            glDrawArrays(GL_TRIANGLES, 0, 36);
+            if (bullet.active) {
+                model = glm::mat4(1.0f);
+                model = glm::translate(model, bullet.position);
+                model = glm::scale(model, glm::vec3(bulletRadius));
+                glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "model"), 1, GL_FALSE, &model[0][0]);
+                glUniform3f(glGetUniformLocation(shaderProgram, "objectColor"), 1.0f, 1.0f, 0.0f);
+                glDrawArrays(GL_TRIANGLES, 0, 36);
+            }
         }
 
-        // Draw physics objects
-        for (const auto& obj : physicsObjects) {
-            if (!obj.isActive) continue;
-            
-            glm::mat4 model = glm::mat4(1.0f);
-            model = glm::translate(model, obj.position);
-            model = glm::rotate(model, obj.rotation.x, glm::vec3(1.0f, 0.0f, 0.0f));
-            model = glm::rotate(model, obj.rotation.y, glm::vec3(0.0f, 1.0f, 0.0f));
-            model = glm::rotate(model, obj.rotation.z, glm::vec3(0.0f, 0.0f, 1.0f));
-            model = glm::scale(model, glm::vec3(obj.size)); // Scale the cube based on its size
-            
-            glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(model));
-            glUniform3f(glGetUniformLocation(shaderProgram, "objectColor"), 0.8f, 0.2f, 0.2f);
-            glDrawArrays(GL_TRIANGLES, 0, 36);
-        }
-
-        // In the render loop, before the cube rendering, add floor rendering
-        glUseProgram(floorShaderProgram);
-        glm::mat4 floorModel = glm::mat4(1.0f);
-        glUniformMatrix4fv(glGetUniformLocation(floorShaderProgram, "model"), 1, GL_FALSE, &floorModel[0][0]);
-        glUniformMatrix4fv(glGetUniformLocation(floorShaderProgram, "view"), 1, GL_FALSE, &view[0][0]);
-        glUniformMatrix4fv(glGetUniformLocation(floorShaderProgram, "projection"), 1, GL_FALSE, &projection[0][0]);
-
-        glBindVertexArray(floorVAO);
-        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
-
-        // Switch back to the main shader for the cube
-        glUseProgram(shaderProgram);
-
-        // glfw: swap buffers and poll IO events (keys pressed/released, mouse moved etc.)
-        // -------------------------------------------------------------------------------
+        // Swap buffers and poll events
         glfwSwapBuffers(window);
         glfwPollEvents();
     }
 
+    // Cleanup
     cleanupPhysX();
 
     // Optional: de-allocate all resources once they've outlived their purpose:
@@ -737,141 +736,15 @@ void shootBullet() {
     lastShotTime = currentTime;
 }
 
-void spawnCube() {
-    float currentTime = glfwGetTime();
-    if (currentTime - lastCubeSpawnTime < cubeSpawnCooldown) return;
-
-    // Find an inactive cube or create a new one
-    auto it = std::find_if(physicsObjects.begin(), physicsObjects.end(),
-                          [](const PhysicsObject& obj) { return !obj.isActive; });
-    
-    if (it != physicsObjects.end()) {
-        // Reuse inactive cube
-        it->isActive = true;
-        it->position = cameraPos + cameraFront * 2.0f;
-        it->velocity = cameraFront * 3.0f;  // Initial velocity of 3 m/s
-        it->acceleration = glm::vec3(0.0f, GRAVITY, 0.0f);
-        it->rotation = glm::vec3(0.0f);
-        it->angularVelocity = glm::vec3(0.0f);
-        it->mass = 1.0f;  // 1kg mass
-        it->size = CUBE_SIZE;
-        
-        // Calculate realistic inertia tensor for a 1kg cube
-        float size2 = CUBE_SIZE * CUBE_SIZE;
-        float inertia = (1.0f/6.0f) * it->mass * size2;  // Moment of inertia for a cube
-        it->inertiaTensor = glm::mat3(
-            inertia, 0.0f, 0.0f,
-            0.0f, inertia, 0.0f,
-            0.0f, 0.0f, inertia
-        );
-    } else if (physicsObjects.size() < MAX_CUBES) {
-        // Create new cube with same properties
-        PhysicsObject newCube;
-        newCube.isActive = true;
-        newCube.position = cameraPos + cameraFront * 2.0f;
-        newCube.velocity = cameraFront * 3.0f;
-        newCube.acceleration = glm::vec3(0.0f, GRAVITY, 0.0f);
-        newCube.rotation = glm::vec3(0.0f);
-        newCube.angularVelocity = glm::vec3(0.0f);
-        newCube.mass = 1.0f;
-        newCube.size = CUBE_SIZE;
-        
-        // Calculate realistic inertia tensor
-        float size2 = CUBE_SIZE * CUBE_SIZE;
-        float inertia = (1.0f/6.0f) * newCube.mass * size2;
-        newCube.inertiaTensor = glm::mat3(
-            inertia, 0.0f, 0.0f,
-            0.0f, inertia, 0.0f,
-            0.0f, 0.0f, inertia
-        );
-        physicsObjects.push_back(newCube);
-    }
-
-    lastCubeSpawnTime = currentTime;
-}
-
-void updatePhysics(float deltaTime) {
-    const float timeStep = std::min(deltaTime, 1.0f/60.0f); // Cap physics timestep at 60Hz
-
-    for (auto& obj : physicsObjects) {
-        if (!obj.isActive) continue;
-
-        // Update linear motion with proper time scaling
-        obj.velocity += obj.acceleration * timeStep;
-        obj.position += obj.velocity * timeStep;
-
-        // Floor collision with proper response
-        if (obj.position.y < FLOOR_Y + obj.size * 0.5f) {
-            obj.position.y = FLOOR_Y + obj.size * 0.5f;
-            
-            if (obj.velocity.y < -0.1f) {
-                // Calculate impact force (F = ma)
-                float impactForce = -obj.velocity.y * obj.mass / timeStep;
-                
-                // Apply normal force and restitution
-                obj.velocity.y = -obj.velocity.y * RESTITUTION;
-                
-                // Apply friction based on normal force
-                glm::vec3 horizontalVel = glm::vec3(obj.velocity.x, 0.0f, obj.velocity.z);
-                if (glm::length(horizontalVel) > 0.01f) {
-                    float normalForce = obj.mass * std::abs(GRAVITY);
-                    float frictionMagnitude = FLOOR_FRICTION * normalForce * timeStep / obj.mass;
-                    glm::vec3 frictionDir = -glm::normalize(horizontalVel);
-                    glm::vec3 frictionForce = frictionDir * std::min(frictionMagnitude, glm::length(horizontalVel));
-                    obj.velocity += frictionForce;
-                }
-
-                // Add realistic torque from impact
-                glm::vec3 contactPoint = glm::vec3(0.0f, -obj.size * 0.5f, 0.0f);
-                glm::vec3 torque = glm::cross(contactPoint, glm::vec3(0.0f, impactForce, 0.0f));
-                obj.angularVelocity += glm::inverse(obj.inertiaTensor) * torque * timeStep;
-            } else {
-                obj.velocity.y = 0.0f;
-            }
-        }
-
-        // Update angular motion
-        obj.angularVelocity *= (1.0f - AIR_RESISTANCE * timeStep);
-        obj.rotation += obj.angularVelocity * timeStep;
-
-        // Apply air resistance (proportional to velocity squared for realism)
-        float speedSq = glm::dot(obj.velocity, obj.velocity);  // v·v = |v|²
-        if (speedSq > 0.0f) {
-            float dragForce = AIR_RESISTANCE * speedSq;
-            obj.velocity -= glm::normalize(obj.velocity) * dragForce * timeStep;
-        }
-
-        // Limit velocities to realistic values
-        const float MAX_VELOCITY = 20.0f;  // 20 m/s max speed
-        const float MAX_ANGULAR_VELOCITY = 20.0f;  // 20 rad/s max rotation
-        
-        if (glm::length(obj.velocity) > MAX_VELOCITY) {
-            obj.velocity = glm::normalize(obj.velocity) * MAX_VELOCITY;
-        }
-        if (glm::length(obj.angularVelocity) > MAX_ANGULAR_VELOCITY) {
-            obj.angularVelocity = glm::normalize(obj.angularVelocity) * MAX_ANGULAR_VELOCITY;
-        }
-    }
-
-    // Check cube-to-cube collisions with improved response
-    for (size_t i = 0; i < physicsObjects.size(); i++) {
-        for (size_t j = i + 1; j < physicsObjects.size(); j++) {
-            if (!physicsObjects[i].isActive || !physicsObjects[j].isActive) continue;
-            
-            if (checkCubeCollision(physicsObjects[i], physicsObjects[j])) {
-                resolveCollision(physicsObjects[i], physicsObjects[j]);
-            }
-        }
-    }
-}
-
 void initPhysX() {
+    // Create foundation
     gFoundation = PxCreateFoundation(PX_PHYSICS_VERSION, gAllocator, gErrorCallback);
     if (!gFoundation) {
         std::cerr << "PxCreateFoundation failed!" << std::endl;
         return;
     }
 
+    // Create physics
     bool recordMemoryAllocations = true;
     gPhysics = PxCreatePhysics(PX_PHYSICS_VERSION, *gFoundation, PxTolerancesScale(), recordMemoryAllocations);
     if (!gPhysics) {
@@ -879,6 +752,7 @@ void initPhysX() {
         return;
     }
 
+    // Create scene
     PxSceneDesc sceneDesc(gPhysics->getTolerancesScale());
     sceneDesc.gravity = PxVec3(0.0f, -9.81f, 0.0f);
     gDispatcher = PxDefaultCpuDispatcherCreate(2);
@@ -886,50 +760,97 @@ void initPhysX() {
     sceneDesc.filterShader = PxDefaultSimulationFilterShader;
     gScene = gPhysics->createScene(sceneDesc);
 
-    gMaterial = gPhysics->createMaterial(0.5f, 0.5f, 0.6f);
+    // Create material
+    gMaterial = gPhysics->createMaterial(0.5f, 0.5f, 0.6f);  // Static friction, dynamic friction, restitution
 
     // Create ground plane
     PxRigidStatic* groundPlane = PxCreatePlane(*gPhysics, PxPlane(0, 1, 0, 0), *gMaterial);
     gScene->addActor(*groundPlane);
+
+    // Create initial cube
+    PxShape* shape = gPhysics->createShape(PxBoxGeometry(0.5f, 0.5f, 0.5f), *gMaterial);
+    PxTransform transform(PxVec3(0.0f, 5.0f, 0.0f));
+    dynamicActor = gPhysics->createRigidDynamic(transform);
+    dynamicActor->attachShape(*shape);
+    PxRigidBodyExt::updateMassAndInertia(*dynamicActor, 10.0f);
+    gScene->addActor(*dynamicActor);
+    shape->release();
 }
 
 void cleanupPhysX() {
+    // Release PhysX objects in reverse order
+    for (auto& cube : cubes) {
+        if (cube.actor) {
+            cube.actor->release();
+        }
+    }
+    cubes.clear();
+
     if (gScene) gScene->release();
     if (gDispatcher) gDispatcher->release();
+    if (gMaterial) gMaterial->release();
     if (gPhysics) gPhysics->release();
     if (gFoundation) gFoundation->release();
 }
 
-void spawnCube(float x, float y, float z) {
-    Cube cube;
-    cube.position = glm::vec3(x, y, z);
+void spawnCube() {
+    float currentTime = glfwGetTime();
+    if (currentTime - lastCubeSpawnTime < CUBE_SPAWN_COOLDOWN) return;
+    lastCubeSpawnTime = currentTime;
 
-    // Create PhysX box
-    PxTransform transform(PxVec3(x, y, z));
+    // Create new cube at camera position
+    PxShape* shape = gPhysics->createShape(PxBoxGeometry(CUBE_SIZE, CUBE_SIZE, CUBE_SIZE), *gMaterial);
+    PxTransform transform(PxVec3(cameraPos.x, cameraPos.y, cameraPos.z));
     PxRigidDynamic* body = gPhysics->createRigidDynamic(transform);
-    PxBoxGeometry geometry(0.5f, 0.5f, 0.5f); // Half-extents
-    PxRigidActorExt::createExclusiveShape(*body, geometry, *gMaterial);
+    body->attachShape(*shape);
+    shape->release();
 
-    // Set mass properties
-    PxRigidBodyExt::updateMassAndInertia(*body, 10.0f);
+    // Set mass and inertia
+    PxRigidBodyExt::updateMassAndInertia(*body, CUBE_MASS);
+    
+    // Set initial velocity in camera direction
+    PxVec3 velocity(cameraFront.x, cameraFront.y, cameraFront.z);
+    velocity.normalize();
+    velocity *= CUBE_INITIAL_SPEED;
+    body->setLinearVelocity(velocity);
 
-    // Lock rotation
-    body->setRigidDynamicLockFlag(PxRigidDynamicLockFlag::eANGULAR_X, true);
-    body->setRigidDynamicLockFlag(PxRigidDynamicLockFlag::eANGULAR_Y, true);
-    body->setRigidDynamicLockFlag(PxRigidDynamicLockFlag::eANGULAR_Z, true);
-
+    // Add to scene
     gScene->addActor(*body);
+
+    // Add to cubes vector
+    Cube cube;
+    cube.position = cameraPos;
     cube.actor = body;
+    cube.isActive = true;
     cubes.push_back(cube);
+
+    // Remove oldest cube if we've exceeded the limit
+    if (cubes.size() > MAX_CUBES) {
+        if (cubes[0].actor) {
+            cubes[0].actor->release();
+        }
+        cubes.erase(cubes.begin());
+    }
 }
 
-void updatePhysics() {
-    gScene->simulate(1.0f / 60.0f);
+void updatePhysics(float deltaTime) {
+    if (!gScene) return;
+
+    // Step PhysX simulation
+    gScene->simulate(deltaTime);
     gScene->fetchResults(true);
 
     // Update cube positions from PhysX
     for (auto& cube : cubes) {
-        PxTransform transform = cube.actor->getGlobalPose();
-        cube.position = glm::vec3(transform.p.x, transform.p.y, transform.p.z);
+        if (cube.isActive && cube.actor) {
+            PxTransform transform = cube.actor->getGlobalPose();
+            cube.position = glm::vec3(transform.p.x, transform.p.y, transform.p.z);
+            
+            // Deactivate cubes that have fallen too far
+            if (cube.position.y < -50.0f) {
+                cube.isActive = false;
+                cube.actor->setGlobalPose(PxTransform(PxVec3(0.0f, -100.0f, 0.0f))); // Move far away
+            }
+        }
     }
-} 
+}
