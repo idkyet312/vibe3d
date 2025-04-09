@@ -9,6 +9,7 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include <algorithm>
 
 // Function declarations
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);
@@ -18,6 +19,8 @@ void createFloorMesh(std::vector<float>& vertices, std::vector<unsigned int>& in
 void mouse_callback(GLFWwindow* window, double xpos, double ypos);
 void createSphereMesh(std::vector<float>& vertices, std::vector<unsigned int>& indices, float radius, int segments);
 void shootBullet();
+void spawnCube();
+void updatePhysics(float deltaTime);
 
 // Settings
 const unsigned int SCR_WIDTH = 800;
@@ -55,6 +58,95 @@ std::vector<Bullet> bullets;
 float bulletRadius = 0.1f;
 float lastShotTime = 0.0f;
 float shootCooldown = 0.5f; // seconds between shots
+
+// Physics-related structures
+struct PhysicsObject {
+    glm::vec3 position;
+    glm::vec3 velocity;
+    glm::vec3 acceleration;
+    glm::vec3 rotation;
+    glm::vec3 angularVelocity;
+    float mass;
+    bool isActive;
+    float size;  // Add size parameter for collision detection
+};
+
+// Physics constants
+const float GRAVITY = -9.81f;
+const float FRICTION = 0.98f;
+const float RESTITUTION = 0.5f;
+const float FLOOR_Y = 0.0f;  // Update to match floor mesh
+const float CUBE_SIZE = 0.3f;
+const float FLOOR_FRICTION = 0.95f;
+const int MAX_CUBES = 10;  // Define MAX_CUBES constant
+
+// Physics objects
+std::vector<PhysicsObject> physicsObjects;
+
+// Add these variables with other timing variables
+float lastCubeSpawnTime = 0.0f;
+float cubeSpawnCooldown = 0.5f;  // Half second cooldown between spawns
+
+bool checkCubeCollision(const PhysicsObject& cube1, const PhysicsObject& cube2) {
+    // Get the half-size of each cube
+    float halfSize1 = cube1.size * 0.5f;
+    float halfSize2 = cube2.size * 0.5f;
+    
+    // Calculate the distance between cube centers
+    glm::vec3 diff = cube1.position - cube2.position;
+    
+    // Check for overlap in each axis
+    bool xOverlap = std::abs(diff.x) < (halfSize1 + halfSize2);
+    bool yOverlap = std::abs(diff.y) < (halfSize1 + halfSize2);
+    bool zOverlap = std::abs(diff.z) < (halfSize1 + halfSize2);
+    
+    // Collision occurs if there's overlap in all three axes
+    return xOverlap && yOverlap && zOverlap;
+}
+
+void resolveCollision(PhysicsObject& cube1, PhysicsObject& cube2) {
+    // Calculate collision normal (direction from cube2 to cube1)
+    glm::vec3 normal = glm::normalize(cube1.position - cube2.position);
+    
+    // Calculate relative velocity
+    glm::vec3 relativeVelocity = cube1.velocity - cube2.velocity;
+    
+    // Calculate relative velocity along the normal
+    float velocityAlongNormal = glm::dot(relativeVelocity, normal);
+    
+    // Don't resolve if objects are moving apart
+    if (velocityAlongNormal > 0) return;
+    
+    // Calculate restitution (bounciness)
+    float restitution = 0.5f;
+    
+    // Calculate impulse scalar
+    float j = -(1.0f + restitution) * velocityAlongNormal;
+    j /= 2.0f; // Assuming equal mass for simplicity
+    
+    // Apply impulse
+    glm::vec3 impulse = j * normal;
+    cube1.velocity += impulse;
+    cube2.velocity -= impulse;
+    
+    // Add angular velocity based on collision
+    glm::vec3 r1 = cube1.position - (cube1.position + cube2.position) * 0.5f;
+    glm::vec3 r2 = cube2.position - (cube1.position + cube2.position) * 0.5f;
+    
+    // Calculate torque
+    glm::vec3 torque1 = glm::cross(r1, impulse);
+    glm::vec3 torque2 = glm::cross(r2, -impulse);
+    
+    // Apply angular velocity (scaled by inverse mass)
+    cube1.angularVelocity += torque1 * 0.1f;
+    cube2.angularVelocity += torque2 * 0.1f;
+    
+    // Separate the cubes to prevent sticking
+    float overlap = (cube1.size + cube2.size) * 0.5f - glm::length(cube1.position - cube2.position);
+    glm::vec3 separation = normal * overlap * 0.5f;
+    cube1.position += separation;
+    cube2.position -= separation;
+}
 
 int main()
 {
@@ -202,12 +294,13 @@ int main()
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, floorEBO);
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, floorIndices.size() * sizeof(unsigned int), floorIndices.data(), GL_STATIC_DRAW);
 
-    // Position attribute
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
+    // Set up vertex attributes for floor
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 9 * sizeof(float), (void*)0); // Position
     glEnableVertexAttribArray(0);
-    // Color attribute
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 9 * sizeof(float), (void*)(3 * sizeof(float))); // Color
     glEnableVertexAttribArray(1);
+    glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 9 * sizeof(float), (void*)(6 * sizeof(float))); // Normal
+    glEnableVertexAttribArray(2);
 
     // In main(), after creating the window, add:
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
@@ -246,6 +339,9 @@ int main()
             }
         }
 
+        // Update physics
+        updatePhysics(deltaTime);
+
         // Render
         // ------
         glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
@@ -282,6 +378,22 @@ int main()
             bulletModel = glm::scale(bulletModel, glm::vec3(bulletRadius));
 
             glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(bulletModel));
+            glDrawArrays(GL_TRIANGLES, 0, 36);
+        }
+
+        // Draw physics objects
+        for (const auto& obj : physicsObjects) {
+            if (!obj.isActive) continue;
+            
+            glm::mat4 model = glm::mat4(1.0f);
+            model = glm::translate(model, obj.position);
+            model = glm::rotate(model, obj.rotation.x, glm::vec3(1.0f, 0.0f, 0.0f));
+            model = glm::rotate(model, obj.rotation.y, glm::vec3(0.0f, 1.0f, 0.0f));
+            model = glm::rotate(model, obj.rotation.z, glm::vec3(0.0f, 0.0f, 1.0f));
+            model = glm::scale(model, glm::vec3(obj.size)); // Scale the cube based on its size
+            
+            glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(model));
+            glUniform3f(glGetUniformLocation(shaderProgram, "objectColor"), 0.8f, 0.2f, 0.2f);
             glDrawArrays(GL_TRIANGLES, 0, 36);
         }
 
@@ -355,6 +467,11 @@ void processInput(GLFWwindow *window, float deltaTime)
         cameraPos.y = 1.0f;
         verticalVelocity = 0.0f;
         isGrounded = true;
+    }
+
+    // Physics-related input
+    if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) {
+        spawnCube();
     }
 }
 
@@ -506,11 +623,11 @@ GLuint loadShaders(const char * vertex_file_path,const char * fragment_file_path
 void createFloorMesh(std::vector<float>& vertices, std::vector<unsigned int>& indices) {
     // Floor vertices (grey color)
     vertices = {
-        // positions         // colors (grey)
-        -10.0f, 0.0f, -10.0f,  0.3f, 0.3f, 0.3f,  // bottom left
-         10.0f, 0.0f, -10.0f,  0.3f, 0.3f, 0.3f,  // bottom right
-         10.0f, 0.0f,  10.0f,  0.3f, 0.3f, 0.3f,  // top right
-        -10.0f, 0.0f,  10.0f,  0.3f, 0.3f, 0.3f   // top left
+        // positions         // colors (grey)      // normals
+        -10.0f, 0.0f, -10.0f,  0.3f, 0.3f, 0.3f,  0.0f, 1.0f, 0.0f,  // bottom left
+         10.0f, 0.0f, -10.0f,  0.3f, 0.3f, 0.3f,  0.0f, 1.0f, 0.0f,  // bottom right
+         10.0f, 0.0f,  10.0f,  0.3f, 0.3f, 0.3f,  0.0f, 1.0f, 0.0f,  // top right
+        -10.0f, 0.0f,  10.0f,  0.3f, 0.3f, 0.3f,  0.0f, 1.0f, 0.0f   // top left
     };
 
     // Floor indices
@@ -575,4 +692,111 @@ void shootBullet() {
     bullet.timeAlive = 0.0f;
     bullets.push_back(bullet);
     lastShotTime = currentTime;
+}
+
+void spawnCube() {
+    float currentTime = glfwGetTime();
+    if (currentTime - lastCubeSpawnTime < cubeSpawnCooldown) return;
+
+    // Find an inactive cube or create a new one
+    auto it = std::find_if(physicsObjects.begin(), physicsObjects.end(),
+                          [](const PhysicsObject& obj) { return !obj.isActive; });
+    
+    if (it != physicsObjects.end()) {
+        // Reuse inactive cube
+        it->isActive = true;
+        it->position = cameraPos + cameraFront * 2.0f;  // Spawn 2 units in front of camera
+        it->velocity = cameraFront * 5.0f;  // Initial velocity in camera direction
+        it->acceleration = glm::vec3(0.0f, -9.8f, 0.0f);  // Gravity
+        it->rotation = glm::vec3(0.0f);  // No rotation
+        it->angularVelocity = glm::vec3(0.0f);  // No angular velocity
+        it->size = 0.5f;  // Cube size
+    } else if (physicsObjects.size() < MAX_CUBES) {
+        // Create new cube
+        PhysicsObject newCube;
+        newCube.isActive = true;
+        newCube.position = cameraPos + cameraFront * 2.0f;  // Spawn 2 units in front of camera
+        newCube.velocity = cameraFront * 5.0f;  // Initial velocity in camera direction
+        newCube.acceleration = glm::vec3(0.0f, -9.8f, 0.0f);  // Gravity
+        newCube.rotation = glm::vec3(0.0f);  // No rotation
+        newCube.angularVelocity = glm::vec3(0.0f);  // No angular velocity
+        newCube.size = 0.5f;  // Cube size
+        physicsObjects.push_back(newCube);
+    }
+
+    lastCubeSpawnTime = currentTime;
+}
+
+void updatePhysics(float deltaTime) {
+    for (auto& obj : physicsObjects) {
+        if (!obj.isActive) continue;
+
+        // Update velocity and position
+        obj.velocity += obj.acceleration * deltaTime;
+        obj.position += obj.velocity * deltaTime;
+
+        // Floor collision with proper response
+        if (obj.position.y < FLOOR_Y + obj.size * 0.5f) {
+            // Reset position to floor level
+            obj.position.y = FLOOR_Y + obj.size * 0.5f;
+            
+            // Only bounce if moving downward significantly
+            if (obj.velocity.y < -0.1f) {
+                obj.velocity.y = -obj.velocity.y * RESTITUTION;
+                
+                // Add rotation based on impact
+                float impactForce = glm::length(obj.velocity);
+                glm::vec3 impactPoint = obj.position + glm::vec3(0.0f, -obj.size * 0.5f, 0.0f);
+                glm::vec3 r = impactPoint - obj.position;
+                glm::vec3 torque = glm::cross(r, glm::vec3(0.0f, -impactForce, 0.0f));
+                obj.angularVelocity += torque * 0.1f;
+            } else {
+                obj.velocity.y = 0.0f;  // Stop vertical movement if nearly stopped
+            }
+
+            // Apply floor friction to horizontal movement
+            obj.velocity.x *= FLOOR_FRICTION;
+            obj.velocity.z *= FLOOR_FRICTION;
+            
+            // Dampen angular velocity when on floor
+            obj.angularVelocity *= FLOOR_FRICTION;
+        }
+
+        // Update rotation based on velocity and angular velocity
+        if (glm::length(obj.velocity) > 0.1f) {
+            // Rolling effect based on horizontal movement
+            obj.angularVelocity.x = obj.velocity.z * 2.0f;
+            obj.angularVelocity.z = -obj.velocity.x * 2.0f;
+        }
+        
+        // Update rotation
+        obj.rotation += obj.angularVelocity * deltaTime;
+
+        // Apply air friction
+        obj.velocity *= FRICTION;
+        obj.angularVelocity *= FRICTION;
+
+        // Limit maximum velocity to prevent extreme speeds
+        const float MAX_VELOCITY = 20.0f;
+        if (glm::length(obj.velocity) > MAX_VELOCITY) {
+            obj.velocity = glm::normalize(obj.velocity) * MAX_VELOCITY;
+        }
+
+        // Limit maximum angular velocity
+        const float MAX_ANGULAR_VELOCITY = 10.0f;
+        if (glm::length(obj.angularVelocity) > MAX_ANGULAR_VELOCITY) {
+            obj.angularVelocity = glm::normalize(obj.angularVelocity) * MAX_ANGULAR_VELOCITY;
+        }
+    }
+
+    // Check cube-to-cube collisions
+    for (size_t i = 0; i < physicsObjects.size(); i++) {
+        for (size_t j = i + 1; j < physicsObjects.size(); j++) {
+            if (!physicsObjects[i].isActive || !physicsObjects[j].isActive) continue;
+            
+            if (checkCubeCollision(physicsObjects[i], physicsObjects[j])) {
+                resolveCollision(physicsObjects[i], physicsObjects[j]);
+            }
+        }
+    }
 } 
