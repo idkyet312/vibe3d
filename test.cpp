@@ -12,12 +12,25 @@
 
 // Function declarations
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);
-void processInput(GLFWwindow *window);
+void processInput(GLFWwindow *window, float deltaTime);
 GLuint loadShaders(const char * vertex_file_path, const char * fragment_file_path);
+void createFloorMesh(std::vector<float>& vertices, std::vector<unsigned int>& indices);
 
 // Settings
 const unsigned int SCR_WIDTH = 800;
 const unsigned int SCR_HEIGHT = 600;
+
+// Basic Camera
+glm::vec3 cameraPos   = glm::vec3(0.0f, 0.0f,  3.0f);
+glm::vec3 cameraFront = glm::vec3(0.0f, 0.0f, -1.0f);
+glm::vec3 cameraUp    = glm::vec3(0.0f, 1.0f,  0.0f);
+float cameraSpeed = 2.5f; // adjust accordingly
+
+// Add these variables at the top with other variables
+float gravity = -9.8f;
+float jumpForce = 5.0f;
+float verticalVelocity = 0.0f;
+bool isGrounded = true;
 
 int main()
 {
@@ -38,7 +51,7 @@ int main()
 
     // glfw window creation
     // --------------------
-    GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Vibe3D Box", NULL, NULL);
+    GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Vibe3D Game", NULL, NULL);
     if (window == NULL)
     {
         std::cerr << "Failed to create GLFW window" << std::endl;
@@ -62,60 +75,62 @@ int main()
 
     // Build and compile our shader program
     // ------------------------------------
-    GLuint shaderProgram = loadShaders("vertex.glsl", "fragment.glsl");
+    // Note: CMakeLists.txt should copy shaders to build directory
+    GLuint shaderProgram = loadShaders("vertex.glsl", "fragment.glsl"); 
     if (shaderProgram == 0) {
          glfwTerminate();
          return -1; // Shader loading failed
     }
 
+    // Add this after the other shader loading
+    GLuint floorShaderProgram = loadShaders("floor_vertex.glsl", "floor_fragment.glsl");
 
     // Set up vertex data (and buffer(s)) and configure vertex attributes
     // ------------------------------------------------------------------
      float vertices[] = {
-        // positions         // maybe add normals or colors later
-        -0.5f, -0.5f, -0.5f,
-         0.5f, -0.5f, -0.5f,
-         0.5f,  0.5f, -0.5f,
-         0.5f,  0.5f, -0.5f,
-        -0.5f,  0.5f, -0.5f,
-        -0.5f, -0.5f, -0.5f,
+        // positions         // Tex Coords (or colors, etc.)
+        -0.5f, -0.5f, -0.5f,  0.0f, 0.0f,
+         0.5f, -0.5f, -0.5f,  1.0f, 0.0f,
+         0.5f,  0.5f, -0.5f,  1.0f, 1.0f,
+         0.5f,  0.5f, -0.5f,  1.0f, 1.0f,
+        -0.5f,  0.5f, -0.5f,  0.0f, 1.0f,
+        -0.5f, -0.5f, -0.5f,  0.0f, 0.0f,
 
-        -0.5f, -0.5f,  0.5f,
-         0.5f, -0.5f,  0.5f,
-         0.5f,  0.5f,  0.5f,
-         0.5f,  0.5f,  0.5f,
-        -0.5f,  0.5f,  0.5f,
-        -0.5f, -0.5f,  0.5f,
+        -0.5f, -0.5f,  0.5f,  0.0f, 0.0f,
+         0.5f, -0.5f,  0.5f,  1.0f, 0.0f,
+         0.5f,  0.5f,  0.5f,  1.0f, 1.0f,
+         0.5f,  0.5f,  0.5f,  1.0f, 1.0f,
+        -0.5f,  0.5f,  0.5f,  0.0f, 1.0f,
+        -0.5f, -0.5f,  0.5f,  0.0f, 0.0f,
 
-        -0.5f,  0.5f,  0.5f,
-        -0.5f,  0.5f, -0.5f,
-        -0.5f, -0.5f, -0.5f,
-        -0.5f, -0.5f, -0.5f,
-        -0.5f, -0.5f,  0.5f,
-        -0.5f,  0.5f,  0.5f,
+        -0.5f,  0.5f,  0.5f,  1.0f, 0.0f,
+        -0.5f,  0.5f, -0.5f,  1.0f, 1.0f,
+        -0.5f, -0.5f, -0.5f,  0.0f, 1.0f,
+        -0.5f, -0.5f, -0.5f,  0.0f, 1.0f,
+        -0.5f, -0.5f,  0.5f,  0.0f, 0.0f,
+        -0.5f,  0.5f,  0.5f,  1.0f, 0.0f,
 
-         0.5f,  0.5f,  0.5f,
-         0.5f,  0.5f, -0.5f,
-         0.5f, -0.5f, -0.5f,
-         0.5f, -0.5f, -0.5f,
-         0.5f, -0.5f,  0.5f,
-         0.5f,  0.5f,  0.5f,
+         0.5f,  0.5f,  0.5f,  1.0f, 0.0f,
+         0.5f,  0.5f, -0.5f,  1.0f, 1.0f,
+         0.5f, -0.5f, -0.5f,  0.0f, 1.0f,
+         0.5f, -0.5f, -0.5f,  0.0f, 1.0f,
+         0.5f, -0.5f,  0.5f,  0.0f, 0.0f,
+         0.5f,  0.5f,  0.5f,  1.0f, 0.0f,
 
-        -0.5f, -0.5f, -0.5f,
-         0.5f, -0.5f, -0.5f,
-         0.5f, -0.5f,  0.5f,
-         0.5f, -0.5f,  0.5f,
-        -0.5f, -0.5f,  0.5f,
-        -0.5f, -0.5f, -0.5f,
+        -0.5f, -0.5f, -0.5f,  0.0f, 1.0f,
+         0.5f, -0.5f, -0.5f,  1.0f, 1.0f,
+         0.5f, -0.5f,  0.5f,  1.0f, 0.0f,
+         0.5f, -0.5f,  0.5f,  1.0f, 0.0f,
+        -0.5f, -0.5f,  0.5f,  0.0f, 0.0f,
+        -0.5f, -0.5f, -0.5f,  0.0f, 1.0f,
 
-        -0.5f,  0.5f, -0.5f,
-         0.5f,  0.5f, -0.5f,
-         0.5f,  0.5f,  0.5f,
-         0.5f,  0.5f,  0.5f,
-        -0.5f,  0.5f,  0.5f,
-        -0.5f,  0.5f, -0.5f
+        -0.5f,  0.5f, -0.5f,  0.0f, 1.0f,
+         0.5f,  0.5f, -0.5f,  1.0f, 1.0f,
+         0.5f,  0.5f,  0.5f,  1.0f, 0.0f,
+         0.5f,  0.5f,  0.5f,  1.0f, 0.0f,
+        -0.5f,  0.5f,  0.5f,  0.0f, 0.0f,
+        -0.5f,  0.5f, -0.5f,  0.0f, 1.0f
     };
-
 
     unsigned int VBO, VAO;
     glGenVertexArrays(1, &VAO);
@@ -127,20 +142,59 @@ int main()
     glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
 
     // Position attribute
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)0);
     glEnableVertexAttribArray(0);
+    // Texture coord attribute (or color, etc.) - location 1
+    // glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(3 * sizeof(float)));
+    // glEnableVertexAttribArray(1);
 
-    // Unbind VAO (it's always a good practice to unbind any buffer/array to prevent strange bugs)
-    glBindVertexArray(0);
+    // Unbind VBO and VAO 
+    glBindBuffer(GL_ARRAY_BUFFER, 0); 
+    glBindVertexArray(0); 
 
+    // Timing
+    float deltaTime = 0.0f; // Time between current frame and last frame
+    float lastFrame = 0.0f; // Time of last frame
+
+    // In main(), after creating the cube mesh, add the floor mesh
+    std::vector<float> floorVertices;
+    std::vector<unsigned int> floorIndices;
+    createFloorMesh(floorVertices, floorIndices);
+
+    // Create and bind floor VAO/VBO/EBO
+    unsigned int floorVAO, floorVBO, floorEBO;
+    glGenVertexArrays(1, &floorVAO);
+    glGenBuffers(1, &floorVBO);
+    glGenBuffers(1, &floorEBO);
+
+    glBindVertexArray(floorVAO);
+
+    glBindBuffer(GL_ARRAY_BUFFER, floorVBO);
+    glBufferData(GL_ARRAY_BUFFER, floorVertices.size() * sizeof(float), floorVertices.data(), GL_STATIC_DRAW);
+
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, floorEBO);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, floorIndices.size() * sizeof(unsigned int), floorIndices.data(), GL_STATIC_DRAW);
+
+    // Position attribute
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+    // Color attribute
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
+    glEnableVertexAttribArray(1);
 
     // Render loop
     // -----------
     while (!glfwWindowShouldClose(window))
     {
+        // Per-frame time logic
+        // -------------------- 
+        float currentFrame = static_cast<float>(glfwGetTime());
+        deltaTime = currentFrame - lastFrame;
+        lastFrame = currentFrame;
+
         // Input
         // -----
-        processInput(window);
+        processInput(window, deltaTime); // Pass deltaTime here
 
         // Render
         // ------
@@ -151,26 +205,34 @@ int main()
         glUseProgram(shaderProgram);
 
         // Create transformations
-        glm::mat4 model         = glm::mat4(1.0f); // make sure to initialize matrix to identity matrix first
-        glm::mat4 view          = glm::mat4(1.0f);
-        glm::mat4 projection    = glm::mat4(1.0f);
-        model = glm::rotate(model, (float)glfwGetTime() * glm::radians(50.0f), glm::vec3(0.5f, 1.0f, 0.0f)); // Rotate the box
-        view  = glm::translate(view, glm::vec3(0.0f, 0.0f, -3.0f)); // Move camera back
-        projection = glm::perspective(glm::radians(45.0f), (float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f, 100.0f);
-
-        // Retrieve the matrix uniform locations
-        unsigned int modelLoc = glGetUniformLocation(shaderProgram, "model");
-        unsigned int viewLoc  = glGetUniformLocation(shaderProgram, "view");
-        unsigned int projLoc  = glGetUniformLocation(shaderProgram, "projection");
-        // Pass them to the shaders (3 different ways)
-        glUniformMatrix4fv(modelLoc, 1, GL_FALSE, glm::value_ptr(model));
-        glUniformMatrix4fv(viewLoc, 1, GL_FALSE, &view[0][0]);
-        glUniformMatrix4fv(projLoc, 1, GL_FALSE, glm::value_ptr(projection));
+        glm::mat4 projection = glm::perspective(glm::radians(45.0f), (float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f, 100.0f);
+        glm::mat4 view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
+        glm::mat4 model = glm::mat4(1.0f);
+        // You can add transformations to the model matrix here (e.g., rotation, translation)
+        // model = glm::rotate(model, (float)glfwGetTime() * glm::radians(50.0f), glm::vec3(0.5f, 1.0f, 0.0f));
+        
+        // Pass matrices to the shader
+        glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
+        glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "view"), 1, GL_FALSE, glm::value_ptr(view));
+        glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(model));
 
         // Draw the box
         glBindVertexArray(VAO);
         glDrawArrays(GL_TRIANGLES, 0, 36); // 36 vertices for 12 triangles (2 per face)
-        glBindVertexArray(0); // No need to unbind it every time
+        // glBindVertexArray(0); // Not strictly necessary to unbind every frame
+
+        // In the render loop, before the cube rendering, add floor rendering
+        glUseProgram(floorShaderProgram);
+        glm::mat4 floorModel = glm::mat4(1.0f);
+        glUniformMatrix4fv(glGetUniformLocation(floorShaderProgram, "model"), 1, GL_FALSE, &floorModel[0][0]);
+        glUniformMatrix4fv(glGetUniformLocation(floorShaderProgram, "view"), 1, GL_FALSE, &view[0][0]);
+        glUniformMatrix4fv(glGetUniformLocation(floorShaderProgram, "projection"), 1, GL_FALSE, &projection[0][0]);
+
+        glBindVertexArray(floorVAO);
+        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+
+        // Switch back to the main shader for the cube
+        glUseProgram(shaderProgram);
 
         // glfw: swap buffers and poll IO events (keys pressed/released, mouse moved etc.)
         // -------------------------------------------------------------------------------
@@ -183,6 +245,7 @@ int main()
     glDeleteVertexArrays(1, &VAO);
     glDeleteBuffers(1, &VBO);
     glDeleteProgram(shaderProgram);
+    glDeleteProgram(floorShaderProgram);
 
     // glfw: terminate, clearing all previously allocated GLFW resources.
     // ------------------------------------------------------------------
@@ -192,10 +255,38 @@ int main()
 
 // process all input: query GLFW whether relevant keys are pressed/released this frame and react accordingly
 // ---------------------------------------------------------------------------------------------------------
-void processInput(GLFWwindow *window)
+void processInput(GLFWwindow *window, float deltaTime)
 {
     if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
         glfwSetWindowShouldClose(window, true);
+
+    // Camera movement
+    float cameraSpeed = 2.5f * deltaTime;
+    if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
+        cameraPos += cameraSpeed * cameraFront;
+    if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
+        cameraPos -= cameraSpeed * cameraFront;
+    if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
+        cameraPos -= glm::normalize(glm::cross(cameraFront, cameraUp)) * cameraSpeed;
+    if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
+        cameraPos += glm::normalize(glm::cross(cameraFront, cameraUp)) * cameraSpeed;
+
+    // Jumping mechanics
+    if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS && isGrounded) {
+        verticalVelocity = jumpForce;
+        isGrounded = false;
+    }
+
+    // Apply gravity
+    verticalVelocity += gravity * deltaTime;
+    cameraPos.y += verticalVelocity * deltaTime;
+
+    // Ground collision
+    if (cameraPos.y <= 1.0f) {  // 1.0f is the height of the camera
+        cameraPos.y = 1.0f;
+        verticalVelocity = 0.0f;
+        isGrounded = true;
+    }
 }
 
 // glfw: whenever the window size changed (by OS or user resize) this callback function executes
@@ -209,6 +300,7 @@ void framebuffer_size_callback(GLFWwindow* window, int width, int height)
 
 
 // Utility function for loading shaders
+// Reads shader files, compiles them, links them into a shader program.
 GLuint loadShaders(const char * vertex_file_path,const char * fragment_file_path){
 
 	// Create the shaders
@@ -224,8 +316,9 @@ GLuint loadShaders(const char * vertex_file_path,const char * fragment_file_path
 		VertexShaderCode = sstr.str();
 		VertexShaderStream.close();
 	}else{
-		std::cerr << "Impossible to open " << vertex_file_path << ". Are you in the right directory? Shaders should be copied to the build directory." << std::endl;
-		return 0;
+		std::cerr << "Impossible to open " << vertex_file_path << ". Check path relative to executable." << std::endl;
+		getchar(); // Keep console window open
+        return 0;
 	}
 
 	// Read the Fragment Shader code from the file
@@ -237,15 +330,15 @@ GLuint loadShaders(const char * vertex_file_path,const char * fragment_file_path
 		FragmentShaderCode = sstr.str();
 		FragmentShaderStream.close();
 	} else {
-        std::cerr << "Impossible to open " << fragment_file_path << ". Are you in the right directory? Shaders should be copied to the build directory." << std::endl;
-		return 0;
+        std::cerr << "Impossible to open " << fragment_file_path << ". Check path relative to executable." << std::endl;
+		getchar(); // Keep console window open
+        return 0;
     }
 
 	GLint Result = GL_FALSE;
 	int InfoLogLength;
 
 	// Compile Vertex Shader
-	//std::cout << "Compiling shader : " << vertex_file_path << std::endl;
 	char const * VertexSourcePointer = VertexShaderCode.c_str();
 	glShaderSource(VertexShaderID, 1, &VertexSourcePointer , NULL);
 	glCompileShader(VertexShaderID);
@@ -263,7 +356,6 @@ GLuint loadShaders(const char * vertex_file_path,const char * fragment_file_path
 	}
 
 	// Compile Fragment Shader
-	//std::cout << "Compiling shader : " << fragment_file_path << std::endl;
 	char const * FragmentSourcePointer = FragmentShaderCode.c_str();
 	glShaderSource(FragmentShaderID, 1, &FragmentSourcePointer , NULL);
 	glCompileShader(FragmentShaderID);
@@ -281,7 +373,6 @@ GLuint loadShaders(const char * vertex_file_path,const char * fragment_file_path
 	}
 
 	// Link the program
-	//std::cout << "Linking program" << std::endl;
 	GLuint ProgramID = glCreateProgram();
 	glAttachShader(ProgramID, VertexShaderID);
 	glAttachShader(ProgramID, FragmentShaderID);
@@ -307,4 +398,22 @@ GLuint loadShaders(const char * vertex_file_path,const char * fragment_file_path
 	glDeleteShader(FragmentShaderID);
 
 	return ProgramID;
+}
+
+// Add this function before main()
+void createFloorMesh(std::vector<float>& vertices, std::vector<unsigned int>& indices) {
+    // Floor vertices (grey color)
+    vertices = {
+        // positions         // colors (grey)
+        -10.0f, 0.0f, -10.0f,  0.3f, 0.3f, 0.3f,  // bottom left
+         10.0f, 0.0f, -10.0f,  0.3f, 0.3f, 0.3f,  // bottom right
+         10.0f, 0.0f,  10.0f,  0.3f, 0.3f, 0.3f,  // top right
+        -10.0f, 0.0f,  10.0f,  0.3f, 0.3f, 0.3f   // top left
+    };
+
+    // Floor indices
+    indices = {
+        0, 1, 2,  // first triangle
+        2, 3, 0   // second triangle
+    };
 } 
