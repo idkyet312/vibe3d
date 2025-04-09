@@ -15,6 +15,7 @@ void framebuffer_size_callback(GLFWwindow* window, int width, int height);
 void processInput(GLFWwindow *window, float deltaTime);
 GLuint loadShaders(const char * vertex_file_path, const char * fragment_file_path);
 void createFloorMesh(std::vector<float>& vertices, std::vector<unsigned int>& indices);
+void mouse_callback(GLFWwindow* window, double xpos, double ypos);
 
 // Settings
 const unsigned int SCR_WIDTH = 800;
@@ -31,6 +32,12 @@ float gravity = -9.8f;
 float jumpForce = 5.0f;
 float verticalVelocity = 0.0f;
 bool isGrounded = true;
+float lastX = 400.0f;
+float lastY = 300.0f;
+float yaw = -90.0f;
+float pitch = 0.0f;
+bool firstMouse = true;
+float mouseSensitivity = 0.1f;
 
 int main()
 {
@@ -182,6 +189,10 @@ int main()
     glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
     glEnableVertexAttribArray(1);
 
+    // In main(), after creating the window, add:
+    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+    glfwSetCursorPosCallback(window, mouse_callback);
+
     // Render loop
     // -----------
     while (!glfwWindowShouldClose(window))
@@ -298,6 +309,39 @@ void framebuffer_size_callback(GLFWwindow* window, int width, int height)
     glViewport(0, 0, width, height);
 }
 
+// Add this function before main()
+void mouse_callback(GLFWwindow* window, double xpos, double ypos)
+{
+    if (firstMouse)
+    {
+        lastX = xpos;
+        lastY = ypos;
+        firstMouse = false;
+    }
+
+    float xoffset = xpos - lastX;
+    float yoffset = lastY - ypos; // reversed since y-coordinates go from bottom to top
+    lastX = xpos;
+    lastY = ypos;
+
+    xoffset *= mouseSensitivity;
+    yoffset *= mouseSensitivity;
+
+    yaw += xoffset;
+    pitch += yoffset;
+
+    // Make sure that when pitch is out of bounds, screen doesn't get flipped
+    if (pitch > 89.0f)
+        pitch = 89.0f;
+    if (pitch < -89.0f)
+        pitch = -89.0f;
+
+    glm::vec3 front;
+    front.x = cos(glm::radians(yaw)) * cos(glm::radians(pitch));
+    front.y = sin(glm::radians(pitch));
+    front.z = sin(glm::radians(yaw)) * cos(glm::radians(pitch));
+    cameraFront = glm::normalize(front);
+}
 
 // Utility function for loading shaders
 // Reads shader files, compiles them, links them into a shader program.
