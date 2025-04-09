@@ -16,6 +16,8 @@ void processInput(GLFWwindow *window, float deltaTime);
 GLuint loadShaders(const char * vertex_file_path, const char * fragment_file_path);
 void createFloorMesh(std::vector<float>& vertices, std::vector<unsigned int>& indices);
 void mouse_callback(GLFWwindow* window, double xpos, double ypos);
+void createSphereMesh(std::vector<float>& vertices, std::vector<unsigned int>& indices, float radius, int segments);
+void shootBullet();
 
 // Settings
 const unsigned int SCR_WIDTH = 800;
@@ -38,6 +40,21 @@ float yaw = -90.0f;
 float pitch = 0.0f;
 bool firstMouse = true;
 float mouseSensitivity = 0.1f;
+
+// Bullet system
+struct Bullet {
+    glm::vec3 position;
+    glm::vec3 direction;
+    float speed = 20.0f;
+    float lifetime = 3.0f; // seconds
+    float timeAlive = 0.0f;
+    bool active = false;
+};
+
+std::vector<Bullet> bullets;
+float bulletRadius = 0.1f;
+float lastShotTime = 0.0f;
+float shootCooldown = 0.5f; // seconds between shots
 
 int main()
 {
@@ -207,6 +224,18 @@ int main()
         // -----
         processInput(window, deltaTime); // Pass deltaTime here
 
+        // Update bullets
+        for (auto& bullet : bullets) {
+            if (!bullet.active) continue;
+            
+            bullet.position += bullet.direction * bullet.speed * deltaTime;
+            bullet.timeAlive += deltaTime;
+            
+            if (bullet.timeAlive >= bullet.lifetime) {
+                bullet.active = false;
+            }
+        }
+
         // Render
         // ------
         glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
@@ -227,10 +256,21 @@ int main()
         glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "view"), 1, GL_FALSE, glm::value_ptr(view));
         glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(model));
 
-        // Draw the box
+        // Draw the cube
         glBindVertexArray(VAO);
-        glDrawArrays(GL_TRIANGLES, 0, 36); // 36 vertices for 12 triangles (2 per face)
-        // glBindVertexArray(0); // Not strictly necessary to unbind every frame
+        glDrawArrays(GL_TRIANGLES, 0, 36);
+
+        // Draw bullets
+        for (const auto& bullet : bullets) {
+            if (!bullet.active) continue;
+
+            glm::mat4 bulletModel = glm::mat4(1.0f);
+            bulletModel = glm::translate(bulletModel, bullet.position);
+            bulletModel = glm::scale(bulletModel, glm::vec3(bulletRadius));
+
+            glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(bulletModel));
+            glDrawArrays(GL_TRIANGLES, 0, 36);
+        }
 
         // In the render loop, before the cube rendering, add floor rendering
         glUseProgram(floorShaderProgram);
@@ -286,6 +326,11 @@ void processInput(GLFWwindow *window, float deltaTime)
     if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS && isGrounded) {
         verticalVelocity = jumpForce;
         isGrounded = false;
+    }
+
+    // Shooting
+    if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS) {
+        shootBullet();
     }
 
     // Apply gravity
@@ -460,4 +505,61 @@ void createFloorMesh(std::vector<float>& vertices, std::vector<unsigned int>& in
         0, 1, 2,  // first triangle
         2, 3, 0   // second triangle
     };
+}
+
+// Remove lighting variables and update the createSphereMesh function
+void createSphereMesh(std::vector<float>& vertices, std::vector<unsigned int>& indices, float radius, int segments) {
+    vertices.clear();
+    indices.clear();
+
+    // Generate vertices
+    for (int i = 0; i <= segments; i++) {
+        float lat = glm::pi<float>() * (-0.5f + (float)i / segments);
+        float y = radius * sin(lat);
+        float r = radius * cos(lat);
+
+        for (int j = 0; j <= segments; j++) {
+            float lon = 2.0f * glm::pi<float>() * (float)j / segments;
+            float x = r * cos(lon);
+            float z = r * sin(lon);
+
+            // Position
+            vertices.push_back(x);
+            vertices.push_back(y);
+            vertices.push_back(z);
+            // Color (bright white)
+            vertices.push_back(1.0f);
+            vertices.push_back(1.0f);
+            vertices.push_back(1.0f);
+        }
+    }
+
+    // Generate indices
+    for (int i = 0; i < segments; i++) {
+        for (int j = 0; j < segments; j++) {
+            int first = i * (segments + 1) + j;
+            int second = first + segments + 1;
+
+            indices.push_back(first);
+            indices.push_back(second);
+            indices.push_back(first + 1);
+
+            indices.push_back(second);
+            indices.push_back(second + 1);
+            indices.push_back(first + 1);
+        }
+    }
+}
+
+void shootBullet() {
+    float currentTime = glfwGetTime();
+    if (currentTime - lastShotTime < shootCooldown) return;
+
+    Bullet bullet;
+    bullet.position = cameraPos;
+    bullet.direction = cameraFront;
+    bullet.active = true;
+    bullet.timeAlive = 0.0f;
+    bullets.push_back(bullet);
+    lastShotTime = currentTime;
 } 
