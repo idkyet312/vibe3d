@@ -1,52 +1,63 @@
 cmake_minimum_required(VERSION 3.10)
-project(Vibe3DGame)
+project(vibe3d)
 
+# Set C++ standard
 set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED True)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Find OpenGL
+# Set PhysX paths
+set(PHYSX_ROOT_DIR "${CMAKE_SOURCE_DIR}/PhysX-107.0-physx-5.6.0/physx")
+set(PHYSX_INCLUDE_DIR "${PHYSX_ROOT_DIR}/include")
+set(PHYSX_LIB_DIR "${PHYSX_ROOT_DIR}/bin/linux.x86_64/release")
+
+# Find required packages
 find_package(OpenGL REQUIRED)
+find_package(glfw3 REQUIRED)
 
-# Find GLFW using pkg-config
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(GLFW3 REQUIRED glfw3)
-
-# GLM is typically header-only, no find_package needed if installed via libglm-dev
-
-# Add executable sources (including GLAD)
-add_executable(${PROJECT_NAME} test.cpp src/glad.c) 
-
-# Include directories (OpenGL, GLFW from pkg-config, GLAD headers)
-target_include_directories(${PROJECT_NAME} PUBLIC 
-    ${OpenGL_INCLUDE_DIR} 
-    ${GLFW3_INCLUDE_DIRS} 
-    ${CMAKE_SOURCE_DIR}/include # Absolute path for GLAD/KHR
+# Add source files
+set(SOURCES
+    test.cpp
+    src/glad.c
 )
 
-# Link libraries (OpenGL, GLFW from pkg-config)
-target_link_libraries(${PROJECT_NAME} PUBLIC 
-    OpenGL::GL 
-    ${GLFW3_LIBRARIES} 
+# Create executable
+add_executable(vibe3d ${SOURCES})
+
+# Include directories
+target_include_directories(vibe3d PRIVATE
+    ${OPENGL_INCLUDE_DIR}
+    ${GLFW3_INCLUDE_DIR}
+    ${PHYSX_INCLUDE_DIR}
+    include
 )
 
-# Find Threads (pkg-config for glfw3 might handle this, but keep for safety)
+# Link directories
+link_directories(${PHYSX_LIB_DIR})
+
+# Link libraries
+target_link_libraries(vibe3d PRIVATE
+    ${OPENGL_LIBRARIES}
+    glfw
+    PhysX_static_64
+    PhysXFoundation_static_64
+    PhysXCommon_static_64
+    PhysXExtensions_static_64
+    PhysXPvdSDK_static_64
+    pthread
+    dl
+)
+
+# Copy shader files to build directory
+file(COPY 
+    ${CMAKE_SOURCE_DIR}/vertex.glsl 
+    ${CMAKE_SOURCE_DIR}/fragment.glsl
+    DESTINATION ${CMAKE_BINARY_DIR})
+
+# Find Threads
 find_package(Threads REQUIRED)
-# target_link_libraries(${PROJECT_NAME} PUBLIC Threads::Threads) # Often redundant with pkg-config
-
-# Copy shader files to the build directory
-file(GLOB SHADER_FILES "${CMAKE_CURRENT_SOURCE_DIR}/*.glsl")
-foreach(SHADER_FILE ${SHADER_FILES})
-    get_filename_component(SHADER_NAME ${SHADER_FILE} NAME)
-    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-                       COMMAND ${CMAKE_COMMAND} -E copy
-                       ${SHADER_FILE}
-                       $<TARGET_FILE_DIR:${PROJECT_NAME}>/${SHADER_NAME}
-                       COMMENT "Copying ${SHADER_NAME} to build directory")
-endforeach() 
+target_link_libraries(vibe3d PRIVATE Threads::Threads)
 
 # Add shader files to the build
-configure_file(${CMAKE_SOURCE_DIR}/vertex.glsl ${CMAKE_BINARY_DIR}/vertex.glsl COPYONLY)
-configure_file(${CMAKE_SOURCE_DIR}/fragment.glsl ${CMAKE_BINARY_DIR}/fragment.glsl COPYONLY)
 configure_file(${CMAKE_SOURCE_DIR}/floor_vertex.glsl ${CMAKE_BINARY_DIR}/floor_vertex.glsl COPYONLY)
 configure_file(${CMAKE_SOURCE_DIR}/floor_fragment.glsl ${CMAKE_BINARY_DIR}/floor_fragment.glsl COPYONLY)
 
