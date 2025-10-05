@@ -38,6 +38,11 @@ bool ForwardPlusRenderer::initialize(GLFWwindow* window) {
     lightGrid_.numTilesY = numTilesY_;
     lightGrid_.maxLightsPerTile = config_.maxLights;
     
+    if (!createDepthResources()) {
+        std::cerr << "Failed to create depth resources" << std::endl;
+        return false;
+    }
+    
     if (!createRenderPass()) {
         std::cerr << "Failed to create render pass" << std::endl;
         return false;
@@ -87,6 +92,12 @@ bool ForwardPlusRenderer::initialize(GLFWwindow* window) {
 void ForwardPlusRenderer::cleanup() {
     if (device_) {
         device_->waitIdle();
+        
+        // Clean up depth resources
+        if (depthImageView_ != VK_NULL_HANDLE) {
+            vkDestroyImageView(device_->getDevice(), depthImageView_, nullptr);
+        }
+        depthImage_.reset();
         
         // Clean up buffers
         vertexBuffer_.reset();
@@ -147,6 +158,7 @@ void ForwardPlusRenderer::cleanup() {
 }
 
 bool ForwardPlusRenderer::createRenderPass() {
+    // Color attachment
     VkAttachmentDescription colorAttachment{
         .format = swapChain_->getImageFormat(),
         .samples = VK_SAMPLE_COUNT_1_BIT,
@@ -158,30 +170,50 @@ bool ForwardPlusRenderer::createRenderPass() {
         .finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
     };
 
+    // Depth attachment
+    VkAttachmentDescription depthAttachment{
+        .format = findDepthFormat(),
+        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+        .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+        .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+        .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        .finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+    };
+
     VkAttachmentReference colorAttachmentRef{
         .attachment = 0,
         .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
     };
 
+    VkAttachmentReference depthAttachmentRef{
+        .attachment = 1,
+        .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+    };
+
     VkSubpassDescription subpass{
         .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
         .colorAttachmentCount = 1,
-        .pColorAttachments = &colorAttachmentRef
+        .pColorAttachments = &colorAttachmentRef,
+        .pDepthStencilAttachment = &depthAttachmentRef
     };
 
     VkSubpassDependency dependency{
         .srcSubpass = VK_SUBPASS_EXTERNAL,
         .dstSubpass = 0,
-        .srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-        .dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        .srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+        .dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
         .srcAccessMask = 0,
-        .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT
+        .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT
     };
 
+    std::array<VkAttachmentDescription, 2> attachments = {colorAttachment, depthAttachment};
+    
     VkRenderPassCreateInfo renderPassInfo{
         .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
-        .attachmentCount = 1,
-        .pAttachments = &colorAttachment,
+        .attachmentCount = static_cast<uint32_t>(attachments.size()),
+        .pAttachments = attachments.data(),
         .subpassCount = 1,
         .pSubpasses = &subpass,
         .dependencyCount = 1,
@@ -196,13 +228,16 @@ bool ForwardPlusRenderer::createFramebuffers() {
     framebuffers_.resize(imageViews.size());
 
     for (size_t i = 0; i < imageViews.size(); i++) {
-        VkImageView attachments[] = { imageViews[i] };
+        std::array<VkImageView, 2> attachments = {
+            imageViews[i],
+            depthImageView_
+        };
 
         VkFramebufferCreateInfo framebufferInfo{
             .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
             .renderPass = renderPass_,
-            .attachmentCount = 1,
-            .pAttachments = attachments,
+            .attachmentCount = static_cast<uint32_t>(attachments.size()),
+            .pAttachments = attachments.data(),
             .width = swapChain_->getExtent().width,
             .height = swapChain_->getExtent().height,
             .layers = 1
@@ -379,6 +414,18 @@ bool ForwardPlusRenderer::createPipeline() {
         .sampleShadingEnable = VK_FALSE
     };
     
+    // Enable depth testing
+    VkPipelineDepthStencilStateCreateInfo depthStencil{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+        .depthTestEnable = VK_TRUE,
+        .depthWriteEnable = VK_TRUE,
+        .depthCompareOp = VK_COMPARE_OP_LESS,
+        .depthBoundsTestEnable = VK_FALSE,
+        .stencilTestEnable = VK_FALSE,
+        .minDepthBounds = 0.0f,
+        .maxDepthBounds = 1.0f
+    };
+    
     VkPipelineColorBlendAttachmentState colorBlendAttachment{
         .blendEnable = VK_FALSE,
         .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
@@ -421,6 +468,7 @@ bool ForwardPlusRenderer::createPipeline() {
         .pViewportState = &viewportState,
         .pRasterizationState = &rasterizer,
         .pMultisampleState = &multisampling,
+        .pDepthStencilState = &depthStencil,
         .pColorBlendState = &colorBlending,
         .layout = forwardPipelineLayout_,
         .renderPass = renderPass_,
@@ -629,8 +677,10 @@ void ForwardPlusRenderer::renderScene(const CameraUBO& camera, std::span<const P
         return;
     }
     
-    // Clear to dark background
-    VkClearValue clearColor = {{{0.02f, 0.02f, 0.04f, 1.0f}}};
+    // Clear values for color and depth
+    std::array<VkClearValue, 2> clearValues{};
+    clearValues[0].color = {{0.02f, 0.02f, 0.04f, 1.0f}};
+    clearValues[1].depthStencil = {1.0f, 0};
     
     VkRenderPassBeginInfo renderPassInfo{
         .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
@@ -640,8 +690,8 @@ void ForwardPlusRenderer::renderScene(const CameraUBO& camera, std::span<const P
             .offset = {0, 0},
             .extent = swapChain_->getExtent()
         },
-        .clearValueCount = 1,
-        .pClearValues = &clearColor
+        .clearValueCount = static_cast<uint32_t>(clearValues.size()),
+        .pClearValues = clearValues.data()
     };
     
     vkCmdBeginRenderPass(cmd, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
@@ -729,6 +779,60 @@ void ForwardPlusRenderer::onWindowResize(uint32_t width, uint32_t height) {
     
     numTilesX_ = calculateNumTiles(width);
     numTilesY_ = calculateNumTiles(height);
+}
+
+VkFormat ForwardPlusRenderer::findDepthFormat() const {
+    std::vector<VkFormat> candidates = {
+        VK_FORMAT_D32_SFLOAT,
+        VK_FORMAT_D32_SFLOAT_S8_UINT,
+        VK_FORMAT_D24_UNORM_S8_UINT
+    };
+    
+    for (VkFormat format : candidates) {
+        VkFormatProperties props;
+        vkGetPhysicalDeviceFormatProperties(device_->getPhysicalDevice(), format, &props);
+        
+        if ((props.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) == 
+            VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) {
+            return format;
+        }
+    }
+    
+    return VK_FORMAT_D32_SFLOAT; // Fallback
+}
+
+bool ForwardPlusRenderer::createDepthResources() {
+    VkFormat depthFormat = findDepthFormat();
+    
+    depthImage_ = std::make_unique<VulkanImage>();
+    if (!depthImage_->create(*device_, 
+                             swapChain_->getExtent().width,
+                             swapChain_->getExtent().height,
+                             depthFormat,
+                             VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)) {
+        return false;
+    }
+    
+    // Create image view
+    VkImageViewCreateInfo viewInfo{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+        .image = depthImage_->getImage(),
+        .viewType = VK_IMAGE_VIEW_TYPE_2D,
+        .format = depthFormat,
+        .subresourceRange = {
+            .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
+            .baseMipLevel = 0,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = 1
+        }
+    };
+    
+    if (vkCreateImageView(device_->getDevice(), &viewInfo, nullptr, &depthImageView_) != VK_SUCCESS) {
+        return false;
+    }
+    
+    return true;
 }
 
 } // namespace vibe::vk
