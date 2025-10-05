@@ -131,7 +131,7 @@ int main() {
     float lastFrame = 0.0f;
     float fpsTimer = 0.0f;
     int frameCount = 0;
-    glm::vec3 cameraPos(0, 1.8f, 3);
+    glm::vec3 cameraPos(0, 0, 4.0f);  // Better camera position for viewing cube
     glm::vec3 mainObjPos(0, 2, 0);
 
     // Main loop
@@ -165,8 +165,13 @@ int main() {
             vibe::vk::CameraUBO camera{};
             glm::vec3 cameraFront = input->getCameraFront();
             camera.view = glm::lookAt(cameraPos, cameraPos + cameraFront, glm::vec3(0, 1, 0));
-            camera.projection = glm::perspective(glm::radians(45.0f), 
-                                                (float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f, 100.0f);
+            
+            // Vulkan NDC: x: [-1, 1], y: [-1, 1], z: [0, 1] (different from OpenGL)
+            // Also Y is flipped in Vulkan
+            glm::mat4 projection = glm::perspective(glm::radians(45.0f), 
+                                                    (float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f, 100.0f);
+            projection[1][1] *= -1;  // Flip Y for Vulkan coordinate system
+            camera.projection = projection;
             camera.position = glm::vec4(cameraPos, 1.0f);
             
             std::vector<vibe::vk::PointLight> lights = {
