@@ -246,10 +246,20 @@ void main() {
     // Gamma correction
     color = pow(color, vec3(1.0/2.2));
     
-    // Debug: Visualize cascade selection (optional)
-    // int cascadeIndex = selectCascadeIndex();
-    // vec3 cascadeColors[4] = vec3[](vec3(1,0,0), vec3(0,1,0), vec3(0,0,1), vec3(1,1,0));
-    // color = mix(color, cascadeColors[cascadeIndex], 0.3);
+    // Debug: Visualize cascade selection and shadows
+    int cascadeIndex = selectCascadeIndex();
+    float shadowValue = calculateCascadedShadow(N, normalize(-shadow.lightDirection));
+    
+    // Show cascade colors and shadow intensity
+    vec3 cascadeColors[4] = vec3[](
+        vec3(1.0, 0.3, 0.3),  // Red - cascade 0
+        vec3(0.3, 1.0, 0.3),  // Green - cascade 1  
+        vec3(0.3, 0.3, 1.0),  // Blue - cascade 2
+        vec3(1.0, 1.0, 0.3)   // Yellow - cascade 3
+    );
+    
+    // Mix cascade color visualization with actual rendering
+    color = mix(color, cascadeColors[cascadeIndex] * shadowValue, 0.4);
     
     outColor = vec4(color, 1.0);
 }
