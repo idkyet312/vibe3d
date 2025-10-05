@@ -84,6 +84,13 @@ struct CameraUBO {
     alignas(16) glm::vec4 position; // w unused
 };
 
+struct ShadowUBO {
+    alignas(16) glm::mat4 lightSpaceMatrices[4]; // 4 cascades
+    alignas(16) glm::vec4 cascadeSplits; // x, y, z = split distances, w = num cascades
+    alignas(16) glm::vec3 lightDirection;
+    alignas(4) float padding;
+};
+
 struct ModelUBO {
     alignas(16) glm::mat4 model;
     alignas(16) glm::mat4 normalMatrix;

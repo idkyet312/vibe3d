@@ -72,6 +72,17 @@ private:
     bool createBuffers();
     bool createCommandBuffers();
     bool createCubeGeometry();
+    
+    // Shadow mapping helpers
+    bool createShadowResources();
+    bool createShadowRenderPass();
+    bool createShadowFramebuffers();
+    bool createShadowPipeline();
+    bool createShadowSampler();
+    void calculateCascadeSplits();
+    void updateShadowUBO();
+    void renderShadowCascades(VkCommandBuffer cmd);
+    glm::mat4 calculateLightSpaceMatrix(float nearPlane, float farPlane);
 
     // Shader helpers
     std::vector<char> readShaderFile(const std::string& filename);
@@ -113,6 +124,19 @@ private:
     std::unique_ptr<VulkanImage> depthImage_;
     VkImageView depthImageView_ = VK_NULL_HANDLE;
     
+    // Shadow mapping resources
+    static constexpr size_t NUM_CASCADES = 4;
+    static constexpr uint32_t SHADOW_MAP_SIZE = 2048;
+    std::array<std::unique_ptr<VulkanImage>, NUM_CASCADES> shadowImages_;
+    std::array<VkImageView, NUM_CASCADES> shadowImageViews_{};
+    VkSampler shadowSampler_ = VK_NULL_HANDLE;
+    VkRenderPass shadowRenderPass_ = VK_NULL_HANDLE;
+    std::array<std::vector<VkFramebuffer>, NUM_CASCADES> shadowFramebuffers_;
+    
+    // Cascade split distances
+    std::array<float, NUM_CASCADES> cascadeSplits_{};
+    glm::vec3 lightDirection_ = glm::normalize(glm::vec3(-0.5f, -1.0f, -0.3f));
+    
     // MSAA resources
     std::unique_ptr<VulkanImage> colorImage_;
     VkImageView colorImageView_ = VK_NULL_HANDLE;
@@ -140,6 +164,7 @@ private:
     static constexpr size_t MAX_FRAMES_IN_FLIGHT = 2;
     
     std::array<std::unique_ptr<VulkanBuffer>, MAX_FRAMES_IN_FLIGHT> cameraBuffers_;
+    std::array<std::unique_ptr<VulkanBuffer>, MAX_FRAMES_IN_FLIGHT> shadowBuffers_;
     std::unique_ptr<VulkanBuffer> lightBuffer_;
     std::unique_ptr<VulkanBuffer> lightGridBuffer_;
     std::unique_ptr<VulkanBuffer> visibleLightIndicesBuffer_;

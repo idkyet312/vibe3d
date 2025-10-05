@@ -5,6 +5,7 @@
 #include <array>
 #include <cmath>
 #include <fstream>
+#include <limits>
 
 namespace vibe::vk {
 
@@ -38,8 +39,31 @@ bool ForwardPlusRenderer::initialize(GLFWwindow* window) {
     lightGrid_.numTilesY = numTilesY_;
     lightGrid_.maxLightsPerTile = config_.maxLights;
     
+    // Calculate cascade splits for shadow mapping
+    calculateCascadeSplits();
+    
     if (!createDepthResources()) {
         std::cerr << "Failed to create depth resources" << std::endl;
+        return false;
+    }
+    
+    if (!createShadowResources()) {
+        std::cerr << "Failed to create shadow resources" << std::endl;
+        return false;
+    }
+    
+    if (!createShadowRenderPass()) {
+        std::cerr << "Failed to create shadow render pass" << std::endl;
+        return false;
+    }
+    
+    if (!createShadowFramebuffers()) {
+        std::cerr << "Failed to create shadow framebuffers" << std::endl;
+        return false;
+    }
+    
+    if (!createShadowSampler()) {
+        std::cerr << "Failed to create shadow sampler" << std::endl;
         return false;
     }
     
@@ -93,6 +117,28 @@ void ForwardPlusRenderer::cleanup() {
     if (device_) {
         device_->waitIdle();
         
+        // Clean up shadow resources
+        if (shadowSampler_ != VK_NULL_HANDLE) {
+            vkDestroySampler(device_->getDevice(), shadowSampler_, nullptr);
+        }
+        
+        for (size_t i = 0; i < NUM_CASCADES; ++i) {
+            if (shadowImageViews_[i] != VK_NULL_HANDLE) {
+                vkDestroyImageView(device_->getDevice(), shadowImageViews_[i], nullptr);
+            }
+            shadowImages_[i].reset();
+            
+            for (auto fb : shadowFramebuffers_[i]) {
+                if (fb != VK_NULL_HANDLE) {
+                    vkDestroyFramebuffer(device_->getDevice(), fb, nullptr);
+                }
+            }
+        }
+        
+        if (shadowRenderPass_ != VK_NULL_HANDLE) {
+            vkDestroyRenderPass(device_->getDevice(), shadowRenderPass_, nullptr);
+        }
+        
         // Clean up depth resources
         if (depthImageView_ != VK_NULL_HANDLE) {
             vkDestroyImageView(device_->getDevice(), depthImageView_, nullptr);
@@ -103,6 +149,9 @@ void ForwardPlusRenderer::cleanup() {
         vertexBuffer_.reset();
         indexBuffer_.reset();
         for (auto& buffer : cameraBuffers_) {
+            buffer.reset();
+        }
+        for (auto& buffer : shadowBuffers_) {
             buffer.reset();
         }
         
@@ -252,7 +301,7 @@ bool ForwardPlusRenderer::createFramebuffers() {
 }
 
 bool ForwardPlusRenderer::createDescriptorSetLayouts() {
-    // Camera UBO descriptor layout
+    // Camera UBO descriptor layout binding 0
     VkDescriptorSetLayoutBinding uboLayoutBinding{
         .binding = 0,
         .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
@@ -260,11 +309,35 @@ bool ForwardPlusRenderer::createDescriptorSetLayouts() {
         .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
         .pImmutableSamplers = nullptr
     };
+    
+    // Shadow UBO descriptor layout binding 1
+    VkDescriptorSetLayoutBinding shadowUboLayoutBinding{
+        .binding = 1,
+        .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+        .descriptorCount = 1,
+        .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+        .pImmutableSamplers = nullptr
+    };
+    
+    // Shadow map sampler binding 2
+    VkDescriptorSetLayoutBinding shadowMapBinding{
+        .binding = 2,
+        .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .descriptorCount = static_cast<uint32_t>(NUM_CASCADES),
+        .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+        .pImmutableSamplers = nullptr
+    };
+
+    std::array<VkDescriptorSetLayoutBinding, 3> bindings = {
+        uboLayoutBinding, 
+        shadowUboLayoutBinding, 
+        shadowMapBinding
+    };
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-        .bindingCount = 1,
-        .pBindings = &uboLayoutBinding
+        .bindingCount = static_cast<uint32_t>(bindings.size()),
+        .pBindings = bindings.data()
     };
 
     return vkCreateDescriptorSetLayout(device_->getDevice(), &layoutInfo, nullptr, 
@@ -276,6 +349,14 @@ bool ForwardPlusRenderer::createBuffers() {
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
         cameraBuffers_[i] = std::make_unique<VulkanBuffer>();
         if (!cameraBuffers_[i]->create(*device_, sizeof(CameraUBO),
+                                       VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | 
+                                       VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
+            return false;
+        }
+        
+        shadowBuffers_[i] = std::make_unique<VulkanBuffer>();
+        if (!shadowBuffers_[i]->create(*device_, sizeof(ShadowUBO),
                                        VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | 
                                        VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
@@ -312,7 +393,25 @@ bool ForwardPlusRenderer::createBuffers() {
             .range = sizeof(CameraUBO)
         };
         
-        VkWriteDescriptorSet descriptorWrite{
+        VkDescriptorBufferInfo shadowBufferInfo{
+            .buffer = shadowBuffers_[i]->getBuffer(),
+            .offset = 0,
+            .range = sizeof(ShadowUBO)
+        };
+        
+        // Shadow map image infos
+        std::array<VkDescriptorImageInfo, NUM_CASCADES> shadowImageInfos;
+        for (size_t j = 0; j < NUM_CASCADES; ++j) {
+            shadowImageInfos[j] = {
+                .sampler = shadowSampler_,
+                .imageView = shadowImageViews_[j],
+                .imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
+            };
+        }
+        
+        std::array<VkWriteDescriptorSet, 3> descriptorWrites{};
+        
+        descriptorWrites[0] = {
             .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
             .dstSet = globalDescriptorSets_[i],
             .dstBinding = 0,
@@ -322,7 +421,28 @@ bool ForwardPlusRenderer::createBuffers() {
             .pBufferInfo = &bufferInfo
         };
         
-        vkUpdateDescriptorSets(device_->getDevice(), 1, &descriptorWrite, 0, nullptr);
+        descriptorWrites[1] = {
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = globalDescriptorSets_[i],
+            .dstBinding = 1,
+            .dstArrayElement = 0,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            .pBufferInfo = &shadowBufferInfo
+        };
+        
+        descriptorWrites[2] = {
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = globalDescriptorSets_[i],
+            .dstBinding = 2,
+            .dstArrayElement = 0,
+            .descriptorCount = static_cast<uint32_t>(NUM_CASCADES),
+            .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            .pImageInfo = shadowImageInfos.data()
+        };
+        
+        vkUpdateDescriptorSets(device_->getDevice(), static_cast<uint32_t>(descriptorWrites.size()), 
+                              descriptorWrites.data(), 0, nullptr);
     }
     
     return true;
@@ -665,6 +785,9 @@ void ForwardPlusRenderer::renderScene(const CameraUBO& camera, std::span<const P
     // Update camera UBO
     cameraBuffers_[currentFrame_]->copyFrom(&camera, sizeof(CameraUBO));
     
+    // Update shadow UBO
+    updateShadowUBO();
+    
     VkCommandBuffer cmd = commandBuffers_[currentFrame_];
     
     vkResetCommandBuffer(cmd, 0);
@@ -676,6 +799,9 @@ void ForwardPlusRenderer::renderScene(const CameraUBO& camera, std::span<const P
     if (vkBeginCommandBuffer(cmd, &beginInfo) != VK_SUCCESS) {
         return;
     }
+    
+    // Render shadow cascades first
+    renderShadowCascades(cmd);
     
     // Clear values for color and depth
     std::array<VkClearValue, 2> clearValues{};
@@ -799,6 +925,248 @@ VkFormat ForwardPlusRenderer::findDepthFormat() const {
     }
     
     return VK_FORMAT_D32_SFLOAT; // Fallback
+}
+
+bool ForwardPlusRenderer::createShadowResources() {
+    VkFormat depthFormat = findDepthFormat();
+    
+    // Create shadow map images for each cascade
+    for (size_t i = 0; i < NUM_CASCADES; ++i) {
+        shadowImages_[i] = std::make_unique<VulkanImage>();
+        if (!shadowImages_[i]->create(*device_, 
+                                      SHADOW_MAP_SIZE,
+                                      SHADOW_MAP_SIZE,
+                                      depthFormat,
+                                      VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT)) {
+            return false;
+        }
+        
+        // Create image view for this cascade
+        VkImageViewCreateInfo viewInfo{
+            .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+            .image = shadowImages_[i]->getImage(),
+            .viewType = VK_IMAGE_VIEW_TYPE_2D,
+            .format = depthFormat,
+            .subresourceRange = {
+                .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1
+            }
+        };
+        
+        if (vkCreateImageView(device_->getDevice(), &viewInfo, nullptr, &shadowImageViews_[i]) != VK_SUCCESS) {
+            return false;
+        }
+    }
+    
+    return true;
+}
+
+bool ForwardPlusRenderer::createShadowRenderPass() {
+    VkAttachmentDescription depthAttachment{
+        .format = findDepthFormat(),
+        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+        .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+        .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+        .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        .finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
+    };
+    
+    VkAttachmentReference depthRef{
+        .attachment = 0,
+        .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+    };
+    
+    VkSubpassDescription subpass{
+        .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
+        .colorAttachmentCount = 0,
+        .pDepthStencilAttachment = &depthRef
+    };
+    
+    VkSubpassDependency dependency{
+        .srcSubpass = VK_SUBPASS_EXTERNAL,
+        .dstSubpass = 0,
+        .srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        .dstStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+        .srcAccessMask = VK_ACCESS_SHADER_READ_BIT,
+        .dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT
+    };
+    
+    VkRenderPassCreateInfo renderPassInfo{
+        .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
+        .attachmentCount = 1,
+        .pAttachments = &depthAttachment,
+        .subpassCount = 1,
+        .pSubpasses = &subpass,
+        .dependencyCount = 1,
+        .pDependencies = &dependency
+    };
+    
+    return vkCreateRenderPass(device_->getDevice(), &renderPassInfo, nullptr, &shadowRenderPass_) == VK_SUCCESS;
+}
+
+bool ForwardPlusRenderer::createShadowFramebuffers() {
+    for (size_t i = 0; i < NUM_CASCADES; ++i) {
+        VkFramebufferCreateInfo framebufferInfo{
+            .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+            .renderPass = shadowRenderPass_,
+            .attachmentCount = 1,
+            .pAttachments = &shadowImageViews_[i],
+            .width = SHADOW_MAP_SIZE,
+            .height = SHADOW_MAP_SIZE,
+            .layers = 1
+        };
+        
+        VkFramebuffer framebuffer;
+        if (vkCreateFramebuffer(device_->getDevice(), &framebufferInfo, nullptr, 
+                               &framebuffer) != VK_SUCCESS) {
+            return false;
+        }
+        shadowFramebuffers_[i].push_back(framebuffer);
+    }
+    
+    return true;
+}
+
+bool ForwardPlusRenderer::createShadowSampler() {
+    VkSamplerCreateInfo samplerInfo{
+        .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+        .magFilter = VK_FILTER_LINEAR,
+        .minFilter = VK_FILTER_LINEAR,
+        .mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
+        .addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+        .addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+        .addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+        .mipLodBias = 0.0f,
+        .anisotropyEnable = VK_FALSE,
+        .maxAnisotropy = 1.0f,
+        .compareEnable = VK_TRUE,
+        .compareOp = VK_COMPARE_OP_LESS_OR_EQUAL,
+        .minLod = 0.0f,
+        .maxLod = 1.0f,
+        .borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE,
+        .unnormalizedCoordinates = VK_FALSE
+    };
+    
+    return vkCreateSampler(device_->getDevice(), &samplerInfo, nullptr, &shadowSampler_) == VK_SUCCESS;
+}
+
+void ForwardPlusRenderer::calculateCascadeSplits() {
+    float nearPlane = 0.1f;
+    float farPlane = 100.0f;
+    float range = farPlane - nearPlane;
+    float ratio = farPlane / nearPlane;
+    
+    // Calculate split depths based on practical split scheme
+    for (uint32_t i = 0; i < NUM_CASCADES; ++i) {
+        float p = (i + 1) / static_cast<float>(NUM_CASCADES);
+        float log = nearPlane * std::pow(ratio, p);
+        float uniform = nearPlane + range * p;
+        float d = 0.95f * log + 0.05f * uniform; // Blend between logarithmic and uniform
+        cascadeSplits_[i] = (d - nearPlane) / range;
+    }
+    
+    // Convert to actual distances
+    cascadeSplits_[0] *= farPlane; // First split
+    cascadeSplits_[1] *= farPlane; // Second split
+    cascadeSplits_[2] *= farPlane; // Third split
+    cascadeSplits_[3] = farPlane;  // Far plane
+}
+
+glm::mat4 ForwardPlusRenderer::calculateLightSpaceMatrix(float nearPlane, float farPlane) {
+    // Get camera frustum corners in world space
+    glm::mat4 proj = glm::perspective(glm::radians(45.0f), 
+                                      static_cast<float>(config_.width) / config_.height,
+                                      nearPlane, farPlane);
+    glm::mat4 invCam = glm::inverse(proj);
+    
+    // Create light view matrix
+    glm::vec3 lightPos = -lightDirection_ * 50.0f;
+    glm::mat4 lightView = glm::lookAt(lightPos, glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+    
+    // Calculate frustum corners
+    std::vector<glm::vec4> frustumCorners;
+    for (uint32_t x = 0; x < 2; ++x) {
+        for (uint32_t y = 0; y < 2; ++y) {
+            for (uint32_t z = 0; z < 2; ++z) {
+                glm::vec4 pt = invCam * glm::vec4(
+                    2.0f * x - 1.0f,
+                    2.0f * y - 1.0f,
+                    2.0f * z - 1.0f,
+                    1.0f
+                );
+                frustumCorners.push_back(pt / pt.w);
+            }
+        }
+    }
+    
+    // Transform to light space and find bounds
+    glm::vec3 minBounds(std::numeric_limits<float>::max());
+    glm::vec3 maxBounds(std::numeric_limits<float>::lowest());
+    
+    for (const auto& corner : frustumCorners) {
+        glm::vec4 lightSpacePos = lightView * corner;
+        minBounds = glm::min(minBounds, glm::vec3(lightSpacePos));
+        maxBounds = glm::max(maxBounds, glm::vec3(lightSpacePos));
+    }
+    
+    // Create orthographic projection for shadow map
+    glm::mat4 lightProjection = glm::ortho(
+        minBounds.x, maxBounds.x,
+        minBounds.y, maxBounds.y,
+        minBounds.z, maxBounds.z
+    );
+    
+    return lightProjection * lightView;
+}
+
+void ForwardPlusRenderer::updateShadowUBO() {
+    ShadowUBO shadowUBO{};
+    
+    // Calculate light space matrices for each cascade
+    float lastSplit = 0.1f;
+    for (size_t i = 0; i < NUM_CASCADES; ++i) {
+        shadowUBO.lightSpaceMatrices[i] = calculateLightSpaceMatrix(lastSplit, cascadeSplits_[i]);
+        lastSplit = cascadeSplits_[i];
+    }
+    
+    shadowUBO.cascadeSplits = glm::vec4(cascadeSplits_[0], cascadeSplits_[1], cascadeSplits_[2], NUM_CASCADES);
+    shadowUBO.lightDirection = lightDirection_;
+    shadowUBO.padding = 0.0f;
+    
+    shadowBuffers_[currentFrame_]->copyFrom(&shadowUBO, sizeof(ShadowUBO));
+}
+
+void ForwardPlusRenderer::renderShadowCascades(VkCommandBuffer cmd) {
+    // This will be called before the main render pass
+    // For now, we'll skip actual shadow rendering and just clear the maps
+    for (size_t i = 0; i < NUM_CASCADES; ++i) {
+        VkClearValue clearValue{};
+        clearValue.depthStencil = {1.0f, 0};
+        
+        VkRenderPassBeginInfo renderPassInfo{
+            .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+            .renderPass = shadowRenderPass_,
+            .framebuffer = shadowFramebuffers_[i][0],
+            .renderArea = {
+                .offset = {0, 0},
+                .extent = {SHADOW_MAP_SIZE, SHADOW_MAP_SIZE}
+            },
+            .clearValueCount = 1,
+            .pClearValues = &clearValue
+        };
+        
+        vkCmdBeginRenderPass(cmd, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+        
+        // TODO: Render scene geometry from light's perspective
+        // For now, just end the render pass
+        
+        vkCmdEndRenderPass(cmd);
+    }
 }
 
 bool ForwardPlusRenderer::createDepthResources() {
