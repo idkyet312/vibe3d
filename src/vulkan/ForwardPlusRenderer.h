@@ -67,10 +67,15 @@ private:
     bool createDepthResources();
     bool createFramebuffers();
     bool createDescriptorSetLayouts();
-    bool createPipelines();
+    bool createPipeline();
     bool createSyncObjects();
     bool createBuffers();
     bool createCommandBuffers();
+    bool createCubeGeometry();
+
+    // Shader helpers
+    std::vector<char> readShaderFile(const std::string& filename);
+    VkShaderModule createShaderModule(const std::vector<char>& code);
 
     // Pipeline creation
     bool createDepthPrepassPipeline();

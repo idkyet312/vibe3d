@@ -1,8 +1,10 @@
 #include "ForwardPlusRenderer.h"
 #include <GLFW/glfw3.h>
+#include <glm/gtc/matrix_transform.hpp>
 #include <iostream>
 #include <array>
 #include <cmath>
+#include <fstream>
 
 namespace vibe::vk {
 
@@ -46,6 +48,26 @@ bool ForwardPlusRenderer::initialize(GLFWwindow* window) {
         return false;
     }
     
+    if (!createDescriptorSetLayouts()) {
+        std::cerr << "Failed to create descriptor layouts" << std::endl;
+        return false;
+    }
+    
+    if (!createBuffers()) {
+        std::cerr << "Failed to create buffers" << std::endl;
+        return false;
+    }
+    
+    if (!createPipeline()) {
+        std::cerr << "Failed to create pipeline" << std::endl;
+        return false;
+    }
+    
+    if (!createCubeGeometry()) {
+        std::cerr << "Failed to create cube geometry" << std::endl;
+        return false;
+    }
+    
     if (!createSyncObjects()) {
         std::cerr << "Failed to create sync objects" << std::endl;
         return false;
@@ -65,6 +87,29 @@ bool ForwardPlusRenderer::initialize(GLFWwindow* window) {
 void ForwardPlusRenderer::cleanup() {
     if (device_) {
         device_->waitIdle();
+        
+        // Clean up buffers
+        vertexBuffer_.reset();
+        indexBuffer_.reset();
+        for (auto& buffer : cameraBuffers_) {
+            buffer.reset();
+        }
+        
+        // Clean up descriptor pool
+        descriptorPool_.reset();
+        
+        // Clean up descriptor layouts
+        if (globalDescriptorLayout_ != VK_NULL_HANDLE) {
+            vkDestroyDescriptorSetLayout(device_->getDevice(), globalDescriptorLayout_, nullptr);
+        }
+        
+        // Clean up pipelines
+        if (forwardPipeline_ != VK_NULL_HANDLE) {
+            vkDestroyPipeline(device_->getDevice(), forwardPipeline_, nullptr);
+        }
+        if (forwardPipelineLayout_ != VK_NULL_HANDLE) {
+            vkDestroyPipelineLayout(device_->getDevice(), forwardPipelineLayout_, nullptr);
+        }
         
         // Clean up sync objects
         for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
@@ -171,6 +216,336 @@ bool ForwardPlusRenderer::createFramebuffers() {
     return true;
 }
 
+bool ForwardPlusRenderer::createDescriptorSetLayouts() {
+    // Camera UBO descriptor layout
+    VkDescriptorSetLayoutBinding uboLayoutBinding{
+        .binding = 0,
+        .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+        .descriptorCount = 1,
+        .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+        .pImmutableSamplers = nullptr
+    };
+
+    VkDescriptorSetLayoutCreateInfo layoutInfo{
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .bindingCount = 1,
+        .pBindings = &uboLayoutBinding
+    };
+
+    return vkCreateDescriptorSetLayout(device_->getDevice(), &layoutInfo, nullptr, 
+                                      &globalDescriptorLayout_) == VK_SUCCESS;
+}
+
+bool ForwardPlusRenderer::createBuffers() {
+    // Create uniform buffers for camera
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        cameraBuffers_[i] = std::make_unique<VulkanBuffer>();
+        if (!cameraBuffers_[i]->create(*device_, sizeof(CameraUBO),
+                                       VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | 
+                                       VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
+            return false;
+        }
+    }
+    
+    // Create descriptor pool
+    descriptorPool_ = std::make_unique<VulkanDescriptorPool>();
+    if (!descriptorPool_->create(*device_, static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT) * 10)) {
+        return false;
+    }
+    
+    // Allocate descriptor sets
+    std::vector<VkDescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, globalDescriptorLayout_);
+    VkDescriptorSetAllocateInfo allocInfo{
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+        .descriptorPool = descriptorPool_->getPool(),
+        .descriptorSetCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT),
+        .pSetLayouts = layouts.data()
+    };
+    
+    globalDescriptorSets_.resize(MAX_FRAMES_IN_FLIGHT);
+    if (vkAllocateDescriptorSets(device_->getDevice(), &allocInfo, 
+                                 globalDescriptorSets_.data()) != VK_SUCCESS) {
+        return false;
+    }
+    
+    // Update descriptor sets
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        VkDescriptorBufferInfo bufferInfo{
+            .buffer = cameraBuffers_[i]->getBuffer(),
+            .offset = 0,
+            .range = sizeof(CameraUBO)
+        };
+        
+        VkWriteDescriptorSet descriptorWrite{
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = globalDescriptorSets_[i],
+            .dstBinding = 0,
+            .dstArrayElement = 0,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            .pBufferInfo = &bufferInfo
+        };
+        
+        vkUpdateDescriptorSets(device_->getDevice(), 1, &descriptorWrite, 0, nullptr);
+    }
+    
+    return true;
+}
+
+bool ForwardPlusRenderer::createPipeline() {
+    // Load shaders
+    auto vertShaderCode = readShaderFile("shaders/cube.vert.spv");
+    auto fragShaderCode = readShaderFile("shaders/cube.frag.spv");
+    
+    if (vertShaderCode.empty() || fragShaderCode.empty()) {
+        std::cerr << "Failed to load cube shaders" << std::endl;
+        return false;
+    }
+    
+    VkShaderModule vertShaderModule = createShaderModule(vertShaderCode);
+    VkShaderModule fragShaderModule = createShaderModule(fragShaderCode);
+    
+    VkPipelineShaderStageCreateInfo vertShaderStageInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+        .stage = VK_SHADER_STAGE_VERTEX_BIT,
+        .module = vertShaderModule,
+        .pName = "main"
+    };
+    
+    VkPipelineShaderStageCreateInfo fragShaderStageInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+        .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
+        .module = fragShaderModule,
+        .pName = "main"
+    };
+    
+    VkPipelineShaderStageCreateInfo shaderStages[] = {vertShaderStageInfo, fragShaderStageInfo};
+    
+    // Vertex input
+    auto bindingDescription = Vertex::getBindingDescription();
+    auto attributeDescriptions = Vertex::getAttributeDescriptions();
+    
+    VkPipelineVertexInputStateCreateInfo vertexInputInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+        .vertexBindingDescriptionCount = 1,
+        .pVertexBindingDescriptions = &bindingDescription,
+        .vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size()),
+        .pVertexAttributeDescriptions = attributeDescriptions.data()
+    };
+    
+    VkPipelineInputAssemblyStateCreateInfo inputAssembly{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+        .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+        .primitiveRestartEnable = VK_FALSE
+    };
+    
+    VkViewport viewport{
+        .x = 0.0f,
+        .y = 0.0f,
+        .width = static_cast<float>(swapChain_->getExtent().width),
+        .height = static_cast<float>(swapChain_->getExtent().height),
+        .minDepth = 0.0f,
+        .maxDepth = 1.0f
+    };
+    
+    VkRect2D scissor{
+        .offset = {0, 0},
+        .extent = swapChain_->getExtent()
+    };
+    
+    VkPipelineViewportStateCreateInfo viewportState{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+        .viewportCount = 1,
+        .pViewports = &viewport,
+        .scissorCount = 1,
+        .pScissors = &scissor
+    };
+    
+    VkPipelineRasterizationStateCreateInfo rasterizer{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+        .depthClampEnable = VK_FALSE,
+        .rasterizerDiscardEnable = VK_FALSE,
+        .polygonMode = VK_POLYGON_MODE_FILL,
+        .cullMode = VK_CULL_MODE_BACK_BIT,
+        .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
+        .depthBiasEnable = VK_FALSE,
+        .lineWidth = 1.0f
+    };
+    
+    VkPipelineMultisampleStateCreateInfo multisampling{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+        .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
+        .sampleShadingEnable = VK_FALSE
+    };
+    
+    VkPipelineColorBlendAttachmentState colorBlendAttachment{
+        .blendEnable = VK_FALSE,
+        .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                         VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT
+    };
+    
+    VkPipelineColorBlendStateCreateInfo colorBlending{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+        .logicOpEnable = VK_FALSE,
+        .attachmentCount = 1,
+        .pAttachments = &colorBlendAttachment
+    };
+    
+    // Push constants for model matrix
+    VkPushConstantRange pushConstantRange{
+        .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+        .offset = 0,
+        .size = sizeof(glm::mat4)
+    };
+    
+    VkPipelineLayoutCreateInfo pipelineLayoutInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .setLayoutCount = 1,
+        .pSetLayouts = &globalDescriptorLayout_,
+        .pushConstantRangeCount = 1,
+        .pPushConstantRanges = &pushConstantRange
+    };
+    
+    if (vkCreatePipelineLayout(device_->getDevice(), &pipelineLayoutInfo, nullptr, 
+                              &forwardPipelineLayout_) != VK_SUCCESS) {
+        return false;
+    }
+    
+    VkGraphicsPipelineCreateInfo pipelineInfo{
+        .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+        .stageCount = 2,
+        .pStages = shaderStages,
+        .pVertexInputState = &vertexInputInfo,
+        .pInputAssemblyState = &inputAssembly,
+        .pViewportState = &viewportState,
+        .pRasterizationState = &rasterizer,
+        .pMultisampleState = &multisampling,
+        .pColorBlendState = &colorBlending,
+        .layout = forwardPipelineLayout_,
+        .renderPass = renderPass_,
+        .subpass = 0
+    };
+    
+    if (vkCreateGraphicsPipelines(device_->getDevice(), VK_NULL_HANDLE, 1, &pipelineInfo, 
+                                 nullptr, &forwardPipeline_) != VK_SUCCESS) {
+        return false;
+    }
+    
+    vkDestroyShaderModule(device_->getDevice(), fragShaderModule, nullptr);
+    vkDestroyShaderModule(device_->getDevice(), vertShaderModule, nullptr);
+    
+    return true;
+}
+
+std::vector<char> ForwardPlusRenderer::readShaderFile(const std::string& filename) {
+    std::ifstream file(filename, std::ios::ate | std::ios::binary);
+    
+    if (!file.is_open()) {
+        return {};
+    }
+    
+    size_t fileSize = static_cast<size_t>(file.tellg());
+    std::vector<char> buffer(fileSize);
+    
+    file.seekg(0);
+    file.read(buffer.data(), fileSize);
+    file.close();
+    
+    return buffer;
+}
+
+VkShaderModule ForwardPlusRenderer::createShaderModule(const std::vector<char>& code) {
+    VkShaderModuleCreateInfo createInfo{
+        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .codeSize = code.size(),
+        .pCode = reinterpret_cast<const uint32_t*>(code.data())
+    };
+    
+    VkShaderModule shaderModule;
+    if (vkCreateShaderModule(device_->getDevice(), &createInfo, nullptr, &shaderModule) != VK_SUCCESS) {
+        return VK_NULL_HANDLE;
+    }
+    
+    return shaderModule;
+}
+
+bool ForwardPlusRenderer::createCubeGeometry() {
+    // Cube vertices with colors
+    std::vector<Vertex> vertices = {
+        // Front face (red)
+        {{-0.5f, -0.5f,  0.5f}, {0.0f, 0.0f, 1.0f}, {0.0f, 0.0f}, {1.0f, 0.0f, 0.0f}},
+        {{ 0.5f, -0.5f,  0.5f}, {0.0f, 0.0f, 1.0f}, {1.0f, 0.0f}, {1.0f, 0.0f, 0.0f}},
+        {{ 0.5f,  0.5f,  0.5f}, {0.0f, 0.0f, 1.0f}, {1.0f, 1.0f}, {1.0f, 0.0f, 0.0f}},
+        {{-0.5f,  0.5f,  0.5f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}, {1.0f, 0.0f, 0.0f}},
+        
+        // Back face (green)
+        {{ 0.5f, -0.5f, -0.5f}, {0.0f, 0.0f, -1.0f}, {0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}},
+        {{-0.5f, -0.5f, -0.5f}, {0.0f, 0.0f, -1.0f}, {1.0f, 0.0f}, {0.0f, 1.0f, 0.0f}},
+        {{-0.5f,  0.5f, -0.5f}, {0.0f, 0.0f, -1.0f}, {1.0f, 1.0f}, {0.0f, 1.0f, 0.0f}},
+        {{ 0.5f,  0.5f, -0.5f}, {0.0f, 0.0f, -1.0f}, {0.0f, 1.0f}, {0.0f, 1.0f, 0.0f}},
+        
+        // Top face (blue)
+        {{-0.5f,  0.5f,  0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}, {0.0f, 0.0f, 1.0f}},
+        {{ 0.5f,  0.5f,  0.5f}, {0.0f, 1.0f, 0.0f}, {1.0f, 0.0f}, {0.0f, 0.0f, 1.0f}},
+        {{ 0.5f,  0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {1.0f, 1.0f}, {0.0f, 0.0f, 1.0f}},
+        {{-0.5f,  0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 1.0f}, {0.0f, 0.0f, 1.0f}},
+        
+        // Bottom face (yellow)
+        {{-0.5f, -0.5f, -0.5f}, {0.0f, -1.0f, 0.0f}, {0.0f, 0.0f}, {1.0f, 1.0f, 0.0f}},
+        {{ 0.5f, -0.5f, -0.5f}, {0.0f, -1.0f, 0.0f}, {1.0f, 0.0f}, {1.0f, 1.0f, 0.0f}},
+        {{ 0.5f, -0.5f,  0.5f}, {0.0f, -1.0f, 0.0f}, {1.0f, 1.0f}, {1.0f, 1.0f, 0.0f}},
+        {{-0.5f, -0.5f,  0.5f}, {0.0f, -1.0f, 0.0f}, {0.0f, 1.0f}, {1.0f, 1.0f, 0.0f}},
+        
+        // Right face (magenta)
+        {{ 0.5f, -0.5f,  0.5f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f}, {1.0f, 0.0f, 1.0f}},
+        {{ 0.5f, -0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}, {1.0f, 0.0f, 1.0f}},
+        {{ 0.5f,  0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f, 1.0f}, {1.0f, 0.0f, 1.0f}},
+        {{ 0.5f,  0.5f,  0.5f}, {1.0f, 0.0f, 0.0f}, {0.0f, 1.0f}, {1.0f, 0.0f, 1.0f}},
+        
+        // Left face (cyan)
+        {{-0.5f, -0.5f, -0.5f}, {-1.0f, 0.0f, 0.0f}, {0.0f, 0.0f}, {0.0f, 1.0f, 1.0f}},
+        {{-0.5f, -0.5f,  0.5f}, {-1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}, {0.0f, 1.0f, 1.0f}},
+        {{-0.5f,  0.5f,  0.5f}, {-1.0f, 0.0f, 0.0f}, {1.0f, 1.0f}, {0.0f, 1.0f, 1.0f}},
+        {{-0.5f,  0.5f, -0.5f}, {-1.0f, 0.0f, 0.0f}, {0.0f, 1.0f}, {0.0f, 1.0f, 1.0f}}
+    };
+    
+    std::vector<uint32_t> indices = {
+        0,  1,  2,  2,  3,  0,   // Front
+        4,  5,  6,  6,  7,  4,   // Back
+        8,  9,  10, 10, 11, 8,   // Top
+        12, 13, 14, 14, 15, 12,  // Bottom
+        16, 17, 18, 18, 19, 16,  // Right
+        20, 21, 22, 22, 23, 20   // Left
+    };
+    
+    indexCount_ = static_cast<uint32_t>(indices.size());
+    
+    // Create vertex buffer
+    VkDeviceSize vertexBufferSize = sizeof(vertices[0]) * vertices.size();
+    vertexBuffer_ = std::make_unique<VulkanBuffer>();
+    if (!vertexBuffer_->create(*device_, vertexBufferSize,
+                               VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                               VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | 
+                               VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
+        return false;
+    }
+    vertexBuffer_->copyFrom(vertices.data(), vertexBufferSize);
+    
+    // Create index buffer
+    VkDeviceSize indexBufferSize = sizeof(indices[0]) * indices.size();
+    indexBuffer_ = std::make_unique<VulkanBuffer>();
+    if (!indexBuffer_->create(*device_, indexBufferSize,
+                              VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                              VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | 
+                              VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
+        return false;
+    }
+    indexBuffer_->copyFrom(indices.data(), indexBufferSize);
+    
+    return true;
+}
+
 bool ForwardPlusRenderer::createSyncObjects() {
     VkSemaphoreCreateInfo semaphoreInfo{
         .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO
@@ -213,6 +588,10 @@ bool ForwardPlusRenderer::createCommandBuffers() {
     return vkAllocateCommandBuffers(device_->getDevice(), &allocInfo, commandBuffers_.data()) == VK_SUCCESS;
 }
 
+uint32_t ForwardPlusRenderer::calculateNumTiles(uint32_t dimension) const noexcept {
+    return (dimension + config_.tileSize - 1) / config_.tileSize;
+}
+
 void ForwardPlusRenderer::beginFrame() {
     currentFrame_ = (currentFrame_ + 1) % MAX_FRAMES_IN_FLIGHT;
     
@@ -227,6 +606,9 @@ void ForwardPlusRenderer::endFrame() {
 }
 
 void ForwardPlusRenderer::renderScene(const CameraUBO& camera, std::span<const PointLight> lights) {
+    // Update camera UBO
+    cameraBuffers_[currentFrame_]->copyFrom(&camera, sizeof(CameraUBO));
+    
     VkCommandBuffer cmd = commandBuffers_[currentFrame_];
     
     vkResetCommandBuffer(cmd, 0);
@@ -239,13 +621,8 @@ void ForwardPlusRenderer::renderScene(const CameraUBO& camera, std::span<const P
         return;
     }
     
-    // Animated clear color based on time
-    float time = static_cast<float>(glfwGetTime());
-    float r = (std::sin(time * 0.5f) + 1.0f) * 0.5f;
-    float g = (std::sin(time * 0.7f + 2.0f) + 1.0f) * 0.5f;
-    float b = (std::sin(time * 0.3f + 4.0f) + 1.0f) * 0.5f;
-    
-    VkClearValue clearColor = {{{r * 0.3f, g * 0.4f, b * 0.6f, 1.0f}}};
+    // Clear to dark blue
+    VkClearValue clearColor = {{{0.01f, 0.01f, 0.05f, 1.0f}}};
     
     VkRenderPassBeginInfo renderPassInfo{
         .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
@@ -261,8 +638,31 @@ void ForwardPlusRenderer::renderScene(const CameraUBO& camera, std::span<const P
     
     vkCmdBeginRenderPass(cmd, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
     
-    // TODO: Draw geometry here (triangles, meshes, etc.)
-    // For now we have a beautiful animated gradient background
+    // Bind pipeline
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, forwardPipeline_);
+    
+    // Bind vertex buffer
+    VkBuffer vertexBuffers[] = {vertexBuffer_->getBuffer()};
+    VkDeviceSize offsets[] = {0};
+    vkCmdBindVertexBuffers(cmd, 0, 1, vertexBuffers, offsets);
+    
+    // Bind index buffer
+    vkCmdBindIndexBuffer(cmd, indexBuffer_->getBuffer(), 0, VK_INDEX_TYPE_UINT32);
+    
+    // Bind descriptor set
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, forwardPipelineLayout_,
+                           0, 1, &globalDescriptorSets_[currentFrame_], 0, nullptr);
+    
+    // Create rotating model matrix
+    float time = static_cast<float>(glfwGetTime());
+    glm::mat4 model = glm::rotate(glm::mat4(1.0f), time * glm::radians(50.0f), glm::vec3(0.5f, 1.0f, 0.0f));
+    
+    // Push model matrix
+    vkCmdPushConstants(cmd, forwardPipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT, 
+                      0, sizeof(glm::mat4), &model);
+    
+    // Draw cube
+    vkCmdDrawIndexed(cmd, indexCount_, 1, 0, 0, 0);
     
     vkCmdEndRenderPass(cmd);
     
@@ -307,10 +707,6 @@ void ForwardPlusRenderer::onWindowResize(uint32_t width, uint32_t height) {
     
     numTilesX_ = calculateNumTiles(width);
     numTilesY_ = calculateNumTiles(height);
-}
-
-uint32_t ForwardPlusRenderer::calculateNumTiles(uint32_t dimension) const noexcept {
-    return (dimension + config_.tileSize - 1) / config_.tileSize;
 }
 
 } // namespace vibe::vk
