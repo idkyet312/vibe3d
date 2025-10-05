@@ -507,7 +507,13 @@ bool ForwardPlusRenderer::createCubeGeometry() {
         {{-0.5f, -0.5f, -0.5f}, {-1.0f,  0.0f,  0.0f}, {0.0f, 0.0f}, {0.2f, 1.0f, 1.0f}},
         {{-0.5f, -0.5f,  0.5f}, {-1.0f,  0.0f,  0.0f}, {1.0f, 0.0f}, {0.2f, 1.0f, 1.0f}},
         {{-0.5f,  0.5f,  0.5f}, {-1.0f,  0.0f,  0.0f}, {1.0f, 1.0f}, {0.2f, 1.0f, 1.0f}},
-        {{-0.5f,  0.5f, -0.5f}, {-1.0f,  0.0f,  0.0f}, {0.0f, 1.0f}, {0.2f, 1.0f, 1.0f}}
+        {{-0.5f,  0.5f, -0.5f}, {-1.0f,  0.0f,  0.0f}, {0.0f, 1.0f}, {0.2f, 1.0f, 1.0f}},
+        
+        // Floor plane (large, below the cube) - Gray with grid pattern
+        {{-5.0f, -2.0f,  5.0f}, { 0.0f,  1.0f,  0.0f}, {0.0f, 0.0f}, {0.3f, 0.3f, 0.35f}},
+        {{ 5.0f, -2.0f,  5.0f}, { 0.0f,  1.0f,  0.0f}, {5.0f, 0.0f}, {0.3f, 0.3f, 0.35f}},
+        {{ 5.0f, -2.0f, -5.0f}, { 0.0f,  1.0f,  0.0f}, {5.0f, 5.0f}, {0.3f, 0.3f, 0.35f}},
+        {{-5.0f, -2.0f, -5.0f}, { 0.0f,  1.0f,  0.0f}, {0.0f, 5.0f}, {0.3f, 0.3f, 0.35f}}
     };
     
     // Corrected winding order for proper culling (counter-clockwise from outside)
@@ -517,7 +523,8 @@ bool ForwardPlusRenderer::createCubeGeometry() {
         8,  9,  10, 10, 11, 8,   // Top
         12, 13, 14, 14, 15, 12,  // Bottom
         16, 17, 18, 18, 19, 16,  // Right
-        20, 21, 22, 22, 23, 20   // Left
+        20, 21, 22, 22, 23, 20,  // Left
+        24, 25, 26, 26, 27, 24   // Floor
     };
     
     indexCount_ = static_cast<uint32_t>(indices.size());
@@ -654,18 +661,30 @@ void ForwardPlusRenderer::renderScene(const CameraUBO& camera, std::span<const P
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, forwardPipelineLayout_,
                            0, 1, &globalDescriptorSets_[currentFrame_], 0, nullptr);
     
-    // Create rotating model matrix - cube at origin, slower rotation
     float time = static_cast<float>(glfwGetTime());
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::rotate(model, time * glm::radians(30.0f), glm::vec3(0.0f, 1.0f, 0.0f));
-    model = glm::rotate(model, time * glm::radians(20.0f), glm::vec3(1.0f, 0.0f, 0.0f));
     
-    // Push model matrix
+    // Draw rotating cube hovering above the floor
+    glm::mat4 cubeModel = glm::mat4(1.0f);
+    cubeModel = glm::translate(cubeModel, glm::vec3(0.0f, 0.5f, 0.0f)); // Hover above floor
+    cubeModel = glm::rotate(cubeModel, time * glm::radians(30.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+    cubeModel = glm::rotate(cubeModel, time * glm::radians(20.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+    
+    // Push model matrix for cube
     vkCmdPushConstants(cmd, forwardPipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT, 
-                      0, sizeof(glm::mat4), &model);
+                      0, sizeof(glm::mat4), &cubeModel);
     
-    // Draw cube
-    vkCmdDrawIndexed(cmd, indexCount_, 1, 0, 0, 0);
+    // Draw cube (36 indices for 6 faces)
+    vkCmdDrawIndexed(cmd, 36, 1, 0, 0, 0);
+    
+    // Draw stationary floor
+    glm::mat4 floorModel = glm::mat4(1.0f); // Identity - no transformation
+    
+    // Push model matrix for floor
+    vkCmdPushConstants(cmd, forwardPipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT, 
+                      0, sizeof(glm::mat4), &floorModel);
+    
+    // Draw floor (6 indices starting at index 36)
+    vkCmdDrawIndexed(cmd, 6, 1, 36, 0, 0);
     
     vkCmdEndRenderPass(cmd);
     
