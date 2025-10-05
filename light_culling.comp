@@ -1,0 +1,147 @@
+#version 430
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+// Input uniforms
+uniform mat4 view;
+uniform mat4 projection;
+uniform ivec2 screenSize;
+uniform ivec2 numTiles;
+uniform int numLights;
+uniform sampler2D depthTexture;
+
+// Light data structure
+struct Light {
+    vec3 position;
+    float radius;
+    vec3 color;
+    float intensity;
+};
+
+// Shader storage buffers
+layout(std430, binding = 0) readonly buffer LightDataBuffer {
+    Light lights[];
+};
+
+layout(std430, binding = 1) writeonly buffer VisibleLightIndicesBuffer {
+    uint visibleLightIndices[];
+};
+
+layout(std430, binding = 2) writeonly buffer LightListBuffer {
+    uint lightCount[];
+};
+
+// Constants
+const uint MAX_LIGHTS_PER_TILE = 1024;
+
+// Shared memory for tile
+shared uint minDepthInt;
+shared uint maxDepthInt;
+shared uint visibleLightCount;
+shared uint visibleLightIndices_s[MAX_LIGHTS_PER_TILE];
+
+vec3 reconstructWorldPos(vec2 screenPos, float depth) {
+    vec4 clipPos = vec4(screenPos * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
+    vec4 viewPos = inverse(projection) * clipPos;
+    viewPos /= viewPos.w;
+    vec4 worldPos = inverse(view) * viewPos;
+    return worldPos.xyz;
+}
+
+void main() {
+    ivec2 tileID = ivec2(gl_WorkGroupID.xy);
+    ivec2 localID = ivec2(gl_LocalInvocationID.xy);
+    uint localIndex = localID.y * 16 + localID.x;
+    
+    // Initialize shared memory
+    if (localIndex == 0) {
+        minDepthInt = 0xFFFFFFFF;
+        maxDepthInt = 0;
+        visibleLightCount = 0;
+    }
+    barrier();
+    
+    // Calculate tile bounds
+    ivec2 tileMin = tileID * 16;
+    ivec2 tileMax = min(tileMin + 16, screenSize);
+    
+    // Find min/max depth in tile
+    float minDepth = 1.0;
+    float maxDepth = 0.0;
+    
+    for (int y = tileMin.y + localID.y; y < tileMax.y; y += 16) {
+        for (int x = tileMin.x + localID.x; x < tileMax.x; x += 16) {
+            float depth = texelFetch(depthTexture, ivec2(x, y), 0).r;
+            minDepth = min(minDepth, depth);
+            maxDepth = max(maxDepth, depth);
+        }
+    }
+    
+    // Atomic operations to find tile min/max depth
+    atomicMin(minDepthInt, floatBitsToUint(minDepth));
+    atomicMax(maxDepthInt, floatBitsToUint(maxDepth));
+    barrier();
+    
+    minDepth = uintBitsToFloat(minDepthInt);
+    maxDepth = uintBitsToFloat(maxDepthInt);
+    
+    // Calculate tile frustum bounds in world space
+    vec2 tileScale = vec2(screenSize) / vec2(2.0 * 16.0);
+    vec2 tileBias = tileScale - vec2(tileID);
+    
+    vec4 c1 = vec4(-1.0 / tileScale.x, 0.0, tileBias.x / tileScale.x, 0.0);
+    vec4 c2 = vec4(0.0, -1.0 / tileScale.y, tileBias.y / tileScale.y, 0.0);
+    vec4 c4 = vec4(0.0, 0.0, 1.0, 0.0);
+    
+    // Transform frustum planes to view space
+    vec4 frustumPlanes[6];
+    frustumPlanes[0] = c4 - c1; // Right
+    frustumPlanes[1] = c4 + c1; // Left
+    frustumPlanes[2] = c4 - c2; // Top
+    frustumPlanes[3] = c4 + c2; // Bottom
+    frustumPlanes[4] = vec4(0.0, 0.0, 1.0, -minDepth); // Near
+    frustumPlanes[5] = vec4(0.0, 0.0, -1.0, maxDepth); // Far
+    
+    // Test lights against tile frustum
+    uint threadCount = 16 * 16;
+    uint passCount = (numLights + threadCount - 1) / threadCount;
+    
+    for (uint passIt = 0; passIt < passCount; ++passIt) {
+        uint lightIndex = passIt * threadCount + localIndex;
+        
+        if (lightIndex >= numLights) break;
+        
+        // Transform light position to view space
+        vec4 lightPosView = view * vec4(lights[lightIndex].position, 1.0);
+        
+        // Test if light intersects tile frustum
+        bool inFrustum = true;
+        for (int i = 0; i < 6; ++i) {
+            float distance = dot(frustumPlanes[i], lightPosView);
+            if (distance < -lights[lightIndex].radius) {
+                inFrustum = false;
+                break;
+            }
+        }
+        
+        // Add light to visible list if it intersects
+        if (inFrustum) {
+            uint index = atomicAdd(visibleLightCount, 1);
+            if (index < MAX_LIGHTS_PER_TILE) {
+                visibleLightIndices_s[index] = lightIndex;
+            }
+        }
+    }
+    
+    barrier();
+    
+    // Write results to global buffers
+    if (localIndex == 0) {
+        uint tileIndex = tileID.y * numTiles.x + tileID.x;
+        lightCount[tileIndex] = min(visibleLightCount, MAX_LIGHTS_PER_TILE);
+        
+        for (uint i = 0; i < min(visibleLightCount, MAX_LIGHTS_PER_TILE); ++i) {
+            visibleLightIndices[tileIndex * MAX_LIGHTS_PER_TILE + i] = visibleLightIndices_s[i];
+        }
+    }
+}

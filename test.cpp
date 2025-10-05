@@ -3,7 +3,12 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
+
+#if PHYSX_ENABLED
 #include <PxPhysicsAPI.h>
+using namespace physx;
+#endif
+
 #include <vector>
 #include <iostream>
 #include <fstream>
@@ -11,12 +16,65 @@
 #include <cmath>
 #include <algorithm>
 
-using namespace physx;
+// Material properties structure
+struct Material {
+    glm::vec3 ambient;
+    glm::vec3 diffuse;
+    glm::vec3 specular;
+    float shininess;
+    std::string name;
+};
+
+// Raytracing material structure
+struct RTMaterial {
+    glm::vec3 albedo;
+    glm::vec3 specular;
+    float shininess;
+    float metallic;
+    float roughness;
+    float ior;
+    int type; // 0 = diffuse, 1 = metal, 2 = glass
+};
+
+// Raytracing sphere structure
+struct RTSphere {
+    glm::vec3 center;
+    float radius;
+    RTMaterial material;
+};
+
+// Predefined materials
+std::vector<Material> materials = {
+    { glm::vec3(0.1745f, 0.01175f, 0.01175f), glm::vec3(0.61424f, 0.04136f, 0.04136f), glm::vec3(0.727811f, 0.626959f, 0.626959f), 76.8f, "Ruby" },
+    { glm::vec3(0.329412f, 0.223529f, 0.027451f), glm::vec3(0.780392f, 0.568627f, 0.113725f), glm::vec3(0.992157f, 0.941176f, 0.807843f), 27.8974f, "Gold" },
+    { glm::vec3(0.2125f, 0.1275f, 0.054f), glm::vec3(0.714f, 0.4284f, 0.18144f), glm::vec3(0.393548f, 0.271906f, 0.166721f), 25.6f, "Bronze" },
+    { glm::vec3(0.25f, 0.25f, 0.25f), glm::vec3(0.4f, 0.4f, 0.4f), glm::vec3(0.774597f, 0.774597f, 0.774597f), 76.8f, "Silver" },
+    { glm::vec3(0.19125f, 0.0735f, 0.0225f), glm::vec3(0.7038f, 0.27048f, 0.0828f), glm::vec3(0.256777f, 0.137622f, 0.086014f), 12.8f, "Copper" },
+    { glm::vec3(0.0f, 0.05f, 0.0f), glm::vec3(0.4f, 0.5f, 0.4f), glm::vec3(0.04f, 0.7f, 0.04f), 10.0f, "Emerald" },
+    { glm::vec3(0.02f, 0.02f, 0.02f), glm::vec3(0.01f, 0.01f, 0.01f), glm::vec3(0.4f, 0.4f, 0.4f), 10.0f, "Black Plastic" },
+    { glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.5f, 0.0f, 0.0f), glm::vec3(0.7f, 0.6f, 0.6f), 32.0f, "Red Plastic" },
+    { glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.1f, 0.35f, 0.1f), glm::vec3(0.45f, 0.55f, 0.45f), 32.0f, "Green Plastic" },
+    { glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 0.5f), glm::vec3(0.6f, 0.6f, 0.7f), 32.0f, "Blue Plastic" }
+};
+
+int currentMaterialIndex = 0;
+bool materialKeyPressed = false;
+
+std::vector<RTMaterial> rtMaterials;
+
+// Raytracing settings
+bool useRaytracing = true;
+bool raytracingKeyPressed = false;
+int maxBounces = 5;
+int numSamples = 1;
+float exposure = 1.0f;
+bool enableToneMapping = true;
 
 // Camera variables
 glm::vec3 cameraPos   = glm::vec3(0.0f, 1.8f,  3.0f);
 glm::vec3 cameraFront = glm::vec3(0.0f, 0.0f, -1.0f);
 glm::vec3 cameraUp    = glm::vec3(0.0f, 1.0f,  0.0f);
+glm::vec3 cameraRight = glm::normalize(glm::cross(cameraFront, cameraUp));
 float cameraSpeed = 10.0f;
 float lastX = 400.0f;
 float lastY = 300.0f;
@@ -31,6 +89,15 @@ float jumpForce = 5.0f;
 float verticalVelocity = 0.0f;
 bool isGrounded = true;
 
+// Simple physics for fallback
+struct SimplePhysicsObject {
+    glm::vec3 position;
+    glm::vec3 velocity;
+    float mass = 1.0f;
+    float size = 0.5f;
+    bool isActive = false;
+};
+
 // Bullet system
 struct Bullet {
     glm::vec3 position;
@@ -39,7 +106,10 @@ struct Bullet {
     float lifetime = 5.0f;
     float timeAlive = 0.0f;
     bool active = false;
+#if PHYSX_ENABLED
     PxRigidDynamic* actor = nullptr;
+#endif
+    SimplePhysicsObject simplePhysics;
 };
 
 std::vector<Bullet> bullets;
@@ -47,6 +117,7 @@ float bulletRadius = 0.05f;
 float lastShotTime = 0.0f;
 float shootCooldown = 0.15f;
 
+#if PHYSX_ENABLED
 // PhysX global variables
 PxDefaultAllocator gAllocator;
 PxDefaultErrorCallback gErrorCallback;
@@ -56,38 +127,47 @@ PxDefaultCpuDispatcher* gDispatcher = nullptr;
 PxScene* gScene = nullptr;
 PxMaterial* gMaterial = nullptr;
 PxPvd* gPvd = nullptr;
+#endif
 
 // Cube structure and variables
 struct Cube {
     glm::vec3 position;
-    PxRigidDynamic* actor;
-    bool isActive;
+#if PHYSX_ENABLED
+    PxRigidDynamic* actor = nullptr;
+#endif
+    bool isActive = false;
+    SimplePhysicsObject simplePhysics;
 };
 
 std::vector<Cube> cubes;
 const int MAX_CUBES = 50;
-const float CUBE_MASS = 1.0f;  // 1 kg
-const float CUBE_SIZE = 0.5f;  // 0.5 meters
-const float CUBE_INITIAL_SPEED = 5.0f;  // 5 m/s
+const float CUBE_MASS = 1.0f;
+const float CUBE_SIZE = 0.5f;
+const float CUBE_INITIAL_SPEED = 5.0f;
 float lastCubeSpawnTime = 0.0f;
-const float CUBE_SPAWN_COOLDOWN = 1.0f;  // 1 second between spawns
+const float CUBE_SPAWN_COOLDOWN = 1.0f;
+
+// Raytracing variables
+std::vector<RTSphere> rtSpheres;
+GLuint raytracingTexture;
+GLuint computeShader;
+GLuint fullscreenShader;
+GLuint fullscreenVAO;
 
 // Settings
 const unsigned int SCR_WIDTH = 800;
 const unsigned int SCR_HEIGHT = 600;
 
 // Global variables
-GLFWwindow* window;
-unsigned int shaderProgram;
-unsigned int floorShaderProgram;
-unsigned int VAO, VBO, floorVAO, floorVBO, floorEBO;
 float deltaTime = 0.0f;
 float lastFrame = 0.0f;
-float fov = 45.0f;
 glm::vec3 lightPos(1.2f, 1.0f, 2.0f);
 glm::vec3 lightColor(1.0f, 1.0f, 1.0f);
-glm::vec3 cubePos(0.0f, 0.0f, 0.0f);
+glm::vec3 cubePos(0.0f, 2.0f, 0.0f);
+
+#if PHYSX_ENABLED
 PxRigidDynamic* dynamicActor = nullptr;
+#endif
 
 // Function declarations
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);
@@ -96,129 +176,38 @@ void mouse_callback(GLFWwindow* window, double xpos, double ypos);
 void initPhysX();
 void cleanupPhysX();
 void updatePhysics(float deltaTime);
+void updateSimplePhysics(float deltaTime);
 void spawnCube();
 GLuint loadShaders(const char* vertex_file_path, const char* fragment_file_path);
+GLuint loadComputeShader(const char* compute_file_path);
 void createFloorMesh(std::vector<float>& vertices, std::vector<unsigned int>& indices);
+void createSphereMesh(std::vector<float>& vertices, std::vector<unsigned int>& indices, float radius, int segments);
 void shootBullet();
+void cycleMaterial();
+void initRaytracing();
+void updateRaytracingScene();
+void renderRaytraced();
+void createFullscreenQuad();
+RTMaterial convertToRTMaterial(const Material& mat, int type = 0);
 
-// Physics-related structures
-struct PhysicsObject {
-    glm::vec3 position;
-    glm::vec3 velocity;
-    glm::vec3 acceleration;
-    glm::vec3 rotation;
-    glm::vec3 angularVelocity;
-    glm::vec3 angularAcceleration;
-    float mass;
-    float size;
-    bool isActive;
-    glm::mat3 inertiaTensor;
-    
-    PhysicsObject() : 
-        position(0.0f), 
-        velocity(0.0f), 
-        acceleration(0.0f),
-        rotation(0.0f),
-        angularVelocity(0.0f),
-        angularAcceleration(0.0f),
-        mass(1.0f),
-        size(1.0f),
-        isActive(false) {
-        // Initialize inertia tensor for a cube
-        float s = size * size;
-        inertiaTensor = glm::mat3(
-            (mass * s) / 6.0f, 0.0f, 0.0f,
-            0.0f, (mass * s) / 6.0f, 0.0f,
-            0.0f, 0.0f, (mass * s) / 6.0f
-        );
-    }
-};
+// OpenGL function pointers for compute shaders (in case GLAD doesn't load them)
+typedef void (APIENTRY *PFNGLDISPATCHCOMPUTEPROC)(GLuint num_groups_x, GLuint num_groups_y, GLuint num_groups_z);
+typedef void (APIENTRY *PFNGLBINDIMAGETEXTUREPROC)(GLuint unit, GLuint texture, GLint level, GLboolean layered, GLint layer, GLenum access, GLenum format);
+typedef void (APIENTRY *PFNGLMEMORYBARRIERPROC)(GLbitfield barriers);
 
-// Physics constants
-const float GRAVITY = -9.81f;  // Real gravity in m/s²
-const float RESTITUTION = 0.3f;  // More realistic bounce (wood/plastic on concrete)
-const float FRICTION = 0.99f;  // Air friction coefficient
-const float FLOOR_FRICTION = 0.8f;  // Concrete-like friction
-const float AIR_RESISTANCE = 0.01f;  // Realistic air resistance
-const float FLOOR_Y = -1.0f;
-
-// Physics objects
-std::vector<PhysicsObject> physicsObjects;
-
-// Add these variables with other timing variables
-float cubeSpawnCooldown = 0.5f;  // Half second cooldown between spawns
-
-bool checkCubeCollision(const PhysicsObject& cube1, const PhysicsObject& cube2) {
-    // Get the half-size of each cube
-    float halfSize1 = cube1.size * 0.5f;
-    float halfSize2 = cube2.size * 0.5f;
-    
-    // Calculate the distance between cube centers
-    glm::vec3 diff = cube1.position - cube2.position;
-    
-    // Check for overlap in each axis
-    bool xOverlap = std::abs(diff.x) < (halfSize1 + halfSize2);
-    bool yOverlap = std::abs(diff.y) < (halfSize1 + halfSize2);
-    bool zOverlap = std::abs(diff.z) < (halfSize1 + halfSize2);
-    
-    // Collision occurs if there's overlap in all three axes
-    return xOverlap && yOverlap && zOverlap;
-}
-
-void resolveCollision(PhysicsObject& cube1, PhysicsObject& cube2) {
-    // Calculate collision normal (direction from cube2 to cube1)
-    glm::vec3 normal = glm::normalize(cube1.position - cube2.position);
-    
-    // Calculate relative velocity
-    glm::vec3 relativeVelocity = cube1.velocity - cube2.velocity;
-    
-    // Calculate relative velocity along the normal
-    float velocityAlongNormal = glm::dot(relativeVelocity, normal);
-    
-    // Don't resolve if objects are moving apart
-    if (velocityAlongNormal > 0) return;
-    
-    // Calculate restitution (bounciness)
-    float restitution = 0.5f;
-    
-    // Calculate impulse scalar
-    float j = -(1.0f + restitution) * velocityAlongNormal;
-    j /= 2.0f; // Assuming equal mass for simplicity
-    
-    // Apply impulse
-    glm::vec3 impulse = j * normal;
-    cube1.velocity += impulse;
-    cube2.velocity -= impulse;
-    
-    // Add angular velocity based on collision
-    glm::vec3 r1 = cube1.position - (cube1.position + cube2.position) * 0.5f;
-    glm::vec3 r2 = cube2.position - (cube1.position + cube2.position) * 0.5f;
-    
-    // Calculate torque
-    glm::vec3 torque1 = glm::cross(r1, impulse);
-    glm::vec3 torque2 = glm::cross(r2, -impulse);
-    
-    // Apply angular velocity (scaled by inverse mass)
-    cube1.angularVelocity += torque1 * 0.1f;
-    cube2.angularVelocity += torque2 * 0.1f;
-    
-    // Separate the cubes to prevent sticking
-    float overlap = (cube1.size + cube2.size) * 0.5f - glm::length(cube1.position - cube2.position);
-    glm::vec3 separation = normal * overlap * 0.5f;
-    cube1.position += separation;
-    cube2.position -= separation;
-}
+PFNGLDISPATCHCOMPUTEPROC glDispatchCompute = nullptr;
+PFNGLBINDIMAGETEXTUREPROC glBindImageTexture = nullptr;
+PFNGLMEMORYBARRIERPROC glMemoryBarrier = nullptr;
 
 int main()
 {
     // glfw: initialize and configure
-    // ------------------------------
     if (!glfwInit())
     {
         std::cerr << "Failed to initialize GLFW" << std::endl;
         return -1;
     }
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
@@ -227,8 +216,7 @@ int main()
 #endif
 
     // glfw window creation
-    // --------------------
-    GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Vibe3D Game", NULL, NULL);
+    GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Vibe3D Game - Raytracing Edition", NULL, NULL);
     if (window == NULL)
     {
         std::cerr << "Failed to create GLFW window" << std::endl;
@@ -239,84 +227,132 @@ int main()
     glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
 
     // glad: load all OpenGL function pointers
-    // ---------------------------------------
     if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress))
     {
         std::cerr << "Failed to initialize GLAD" << std::endl;
         return -1;
     }
 
+    // Load OpenGL function pointers for compute shaders
+    glDispatchCompute = (PFNGLDISPATCHCOMPUTEPROC)glfwGetProcAddress("glDispatchCompute");
+    glBindImageTexture = (PFNGLBINDIMAGETEXTUREPROC)glfwGetProcAddress("glBindImageTexture");
+    glMemoryBarrier = (PFNGLMEMORYBARRIERPROC)glfwGetProcAddress("glMemoryBarrier");
+
+    // Check OpenGL version and compute shader support
+    std::cout << "OpenGL Version: " << glGetString(GL_VERSION) << std::endl;
+    std::cout << "GLSL Version: " << glGetString(GL_SHADING_LANGUAGE_VERSION) << std::endl;
+    
+    // Check if compute shaders are supported
+    int major, minor;
+    glGetIntegerv(GL_MAJOR_VERSION, &major);
+    glGetIntegerv(GL_MINOR_VERSION, &minor);
+    
+    bool computeShaderSupported = (major > 4) || (major == 4 && minor >= 3);
+    
+    if (computeShaderSupported) {
+        // Try to query compute shader capabilities
+        GLint maxComputeWorkGroupInvocations = 0;
+        glGetIntegerv(0x90EB, &maxComputeWorkGroupInvocations); // GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS
+        
+        if (glGetError() == GL_NO_ERROR && maxComputeWorkGroupInvocations > 0) {
+            std::cout << "Max compute work group invocations: " << maxComputeWorkGroupInvocations << std::endl;
+            std::cout << "Compute shaders supported - raytracing available!" << std::endl;
+        } else {
+            std::cout << "Compute shader capability query failed" << std::endl;
+            computeShaderSupported = false;
+        }
+    } else {
+        std::cout << "Compute shaders not supported (OpenGL 4.3+ required)" << std::endl;
+        std::cout << "Current version: " << major << "." << minor << std::endl;
+        std::cout << "Using enhanced rasterization mode instead" << std::endl;
+        useRaytracing = false;
+    }
+    
+    // Force enable raytracing if we have OpenGL 4.3+
+    if (computeShaderSupported) {
+        useRaytracing = true;
+    } else {
+        useRaytracing = false;
+    }
+
+    // Print PhysX status
+#if PHYSX_ENABLED
+    std::cout << "PhysX enabled - using hardware physics" << std::endl;
+#else
+    std::cout << "PhysX not available - using simple physics fallback" << std::endl;
+#endif
+
+    // Print material system info
+    std::cout << "Material System Initialized with " << materials.size() << " materials" << std::endl;
+    std::cout << "Current material: " << materials[currentMaterialIndex].name << std::endl;
+    std::cout << "Press M to cycle through materials" << std::endl;
+    if (useRaytracing) {
+        std::cout << "Press R to toggle raytracing mode" << std::endl;
+    } else {
+        std::cout << "Raytracing not available - using enhanced rasterization with PBR-like features" << std::endl;
+    }
+    std::cout << "Press + and - to adjust exposure" << std::endl;
+    std::cout << "Enhanced Features:" << std::endl;
+    std::cout << "- PBR-like material rendering" << std::endl;
+    std::cout << "- Environment reflections" << std::endl;
+    std::cout << "- Metallic/Roughness workflow" << std::endl;
+    std::cout << "- Fresnel reflections" << std::endl;
+    std::cout << "- Ambient occlusion" << std::endl;
+
     // Configure global opengl state
-    // -----------------------------
-    glEnable(GL_DEPTH_TEST); // Enable depth testing for 3D
+    glEnable(GL_DEPTH_TEST);
 
     // Build and compile our shader program
-    // ------------------------------------
-    // Note: CMakeLists.txt should copy shaders to build directory
     GLuint shaderProgram = loadShaders("vertex.glsl", "fragment.glsl"); 
     if (shaderProgram == 0) {
          glfwTerminate();
-         return -1; // Shader loading failed
+         return -1;
     }
 
-    // Add this after the other shader loading
     GLuint floorShaderProgram = loadShaders("floor_vertex.glsl", "floor_fragment.glsl");
+    if (floorShaderProgram == 0) {
+        glfwTerminate();
+        return -1;
+    }
 
-    // Set up vertex data (and buffer(s)) and configure vertex attributes
-    // ------------------------------------------------------------------
-    float vertices[] = {
-        // positions          // normals           // texture coords
-        -0.5f, -0.5f, -0.5f,  0.0f,  0.0f, -1.0f,  0.0f, 0.0f,
-         0.5f, -0.5f, -0.5f,  0.0f,  0.0f, -1.0f,  1.0f, 0.0f,
-         0.5f,  0.5f, -0.5f,  0.0f,  0.0f, -1.0f,  1.0f, 1.0f,
-         0.5f,  0.5f, -0.5f,  0.0f,  0.0f, -1.0f,  1.0f, 1.0f,
-        -0.5f,  0.5f, -0.5f,  0.0f,  0.0f, -1.0f,  0.0f, 1.0f,
-        -0.5f, -0.5f, -0.5f,  0.0f,  0.0f, -1.0f,  0.0f, 0.0f,
+    // Load raytracing shaders
+    if (useRaytracing) {
+        computeShader = loadComputeShader("raytracing.comp");
+        if (computeShader == 0) {
+            std::cerr << "Failed to load raytracing compute shader" << std::endl;
+            useRaytracing = false;
+        }
 
-        -0.5f, -0.5f,  0.5f,  0.0f,  0.0f, 1.0f,   0.0f, 0.0f,
-         0.5f, -0.5f,  0.5f,  0.0f,  0.0f, 1.0f,   1.0f, 0.0f,
-         0.5f,  0.5f,  0.5f,  0.0f,  0.0f, 1.0f,   1.0f, 1.0f,
-         0.5f,  0.5f,  0.5f,  0.0f,  0.0f, 1.0f,   1.0f, 1.0f,
-        -0.5f,  0.5f,  0.5f,  0.0f,  0.0f, 1.0f,   0.0f, 1.0f,
-        -0.5f, -0.5f,  0.5f,  0.0f,  0.0f, 1.0f,   0.0f, 0.0f,
+        fullscreenShader = loadShaders("fullscreen_vertex.glsl", "fullscreen_fragment.glsl");
+        if (fullscreenShader == 0) {
+            std::cerr << "Failed to load fullscreen shader" << std::endl;
+            useRaytracing = false;
+        }
 
-        -0.5f,  0.5f,  0.5f, -1.0f,  0.0f,  0.0f,  1.0f, 0.0f,
-        -0.5f,  0.5f, -0.5f, -1.0f,  0.0f,  0.0f,  1.0f, 1.0f,
-        -0.5f, -0.5f, -0.5f, -1.0f,  0.0f,  0.0f,  0.0f, 1.0f,
-        -0.5f, -0.5f, -0.5f, -1.0f,  0.0f,  0.0f,  0.0f, 1.0f,
-        -0.5f, -0.5f,  0.5f, -1.0f,  0.0f,  0.0f,  0.0f, 0.0f,
-        -0.5f,  0.5f,  0.5f, -1.0f,  0.0f,  0.0f,  1.0f, 0.0f,
+        // Initialize raytracing
+        if (useRaytracing) {
+            initRaytracing();
+            createFullscreenQuad();
+            std::cout << "Raytracing initialized successfully!" << std::endl;
+        }
+    }
 
-         0.5f,  0.5f,  0.5f,  1.0f,  0.0f,  0.0f,  1.0f, 0.0f,
-         0.5f,  0.5f, -0.5f,  1.0f,  0.0f,  0.0f,  1.0f, 1.0f,
-         0.5f, -0.5f, -0.5f,  1.0f,  0.0f,  0.0f,  0.0f, 1.0f,
-         0.5f, -0.5f, -0.5f,  1.0f,  0.0f,  0.0f,  0.0f, 1.0f,
-         0.5f, -0.5f,  0.5f,  1.0f,  0.0f,  0.0f,  0.0f, 0.0f,
-         0.5f,  0.5f,  0.5f,  1.0f,  0.0f,  0.0f,  1.0f, 0.0f,
+    // Create sphere mesh
+    std::vector<float> sphereVertices;
+    std::vector<unsigned int> sphereIndices;
+    createSphereMesh(sphereVertices, sphereIndices, 0.5f, 32); // radius = 0.5, 32 segments
 
-        -0.5f, -0.5f, -0.5f,  0.0f, -1.0f,  0.0f,  0.0f, 1.0f,
-         0.5f, -0.5f, -0.5f,  0.0f, -1.0f,  0.0f,  1.0f, 1.0f,
-         0.5f, -0.5f,  0.5f,  0.0f, -1.0f,  0.0f,  1.0f, 0.0f,
-         0.5f, -0.5f,  0.5f,  0.0f, -1.0f,  0.0f,  1.0f, 0.0f,
-        -0.5f, -0.5f,  0.5f,  0.0f, -1.0f,  0.0f,  0.0f, 0.0f,
-        -0.5f, -0.5f, -0.5f,  0.0f, -1.0f,  0.0f,  0.0f, 1.0f,
-
-        -0.5f,  0.5f, -0.5f,  0.0f,  1.0f,  0.0f,  0.0f, 1.0f,
-         0.5f,  0.5f, -0.5f,  0.0f,  1.0f,  0.0f,  1.0f, 1.0f,
-         0.5f,  0.5f,  0.5f,  0.0f,  1.0f,  0.0f,  1.0f, 0.0f,
-         0.5f,  0.5f,  0.5f,  0.0f,  1.0f,  0.0f,  1.0f, 0.0f,
-        -0.5f,  0.5f,  0.5f,  0.0f,  1.0f,  0.0f,  0.0f, 0.0f,
-        -0.5f,  0.5f, -0.5f,  0.0f,  1.0f,  0.0f,  0.0f, 1.0f
-    };
-
-    unsigned int VBO, VAO;
+    unsigned int VBO, VAO, EBO;
     glGenVertexArrays(1, &VAO);
     glGenBuffers(1, &VBO);
+    glGenBuffers(1, &EBO);
 
     glBindVertexArray(VAO);
-
     glBindBuffer(GL_ARRAY_BUFFER, VBO);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, sphereVertices.size() * sizeof(float), sphereVertices.data(), GL_STATIC_DRAW);
+    
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sphereIndices.size() * sizeof(unsigned int), sphereIndices.data(), GL_STATIC_DRAW);
 
     // Position attribute
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)0);
@@ -324,160 +360,217 @@ int main()
     // Normal attribute
     glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)(3 * sizeof(float)));
     glEnableVertexAttribArray(1);
-    // Texture coord attribute (or color, etc.) - location 2
+    // Texture coord attribute
     glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)(6 * sizeof(float)));
     glEnableVertexAttribArray(2);
 
-    // Unbind VBO and VAO 
-    glBindBuffer(GL_ARRAY_BUFFER, 0); 
-    glBindVertexArray(0); 
-
-    // Timing
-    float deltaTime = 0.0f; // Time between current frame and last frame
-    float lastFrame = 0.0f; // Time of last frame
-
-    // In main(), after creating the cube mesh, add the floor mesh
+    // Store sphere index count for rendering
+    const int sphereIndexCount = static_cast<int>(sphereIndices.size());
+    
+    // Floor mesh
     std::vector<float> floorVertices;
     std::vector<unsigned int> floorIndices;
     createFloorMesh(floorVertices, floorIndices);
 
-    // Create and bind floor VAO/VBO/EBO
     unsigned int floorVAO, floorVBO, floorEBO;
     glGenVertexArrays(1, &floorVAO);
     glGenBuffers(1, &floorVBO);
     glGenBuffers(1, &floorEBO);
 
     glBindVertexArray(floorVAO);
-
     glBindBuffer(GL_ARRAY_BUFFER, floorVBO);
     glBufferData(GL_ARRAY_BUFFER, floorVertices.size() * sizeof(float), floorVertices.data(), GL_STATIC_DRAW);
-
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, floorEBO);
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, floorIndices.size() * sizeof(unsigned int), floorIndices.data(), GL_STATIC_DRAW);
 
-    // Set up vertex attributes for floor
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 9 * sizeof(float), (void*)0); // Position
+    // Floor vertex attributes
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 9 * sizeof(float), (void*)0);
     glEnableVertexAttribArray(0);
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 9 * sizeof(float), (void*)(3 * sizeof(float))); // Color
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 9 * sizeof(float), (void*)(3 * sizeof(float)));
     glEnableVertexAttribArray(1);
-    glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 9 * sizeof(float), (void*)(6 * sizeof(float))); // Normal
+    glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 9 * sizeof(float), (void*)(6 * sizeof(float)));
     glEnableVertexAttribArray(2);
 
-    // In main(), after creating the window, add:
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
     glfwSetCursorPosCallback(window, mouse_callback);
-
-    // After creating the shader program, add:
-    glUseProgram(shaderProgram);
-    // Set lighting uniforms
-    glUniform3f(glGetUniformLocation(shaderProgram, "lightPos"), 2.0f, 2.0f, 2.0f);
-    glUniform3f(glGetUniformLocation(shaderProgram, "lightColor"), 1.0f, 1.0f, 1.0f);
-    glUniform3f(glGetUniformLocation(shaderProgram, "objectColor"), 0.5f, 0.5f, 0.5f);
 
     // Initialize PhysX
     initPhysX();
 
     // Main loop
     while (!glfwWindowShouldClose(window)) {
-        // Calculate delta time
         float currentFrame = glfwGetTime();
         deltaTime = currentFrame - lastFrame;
         lastFrame = currentFrame;
 
-        // Process input
         processInput(window, deltaTime);
 
-        // Clear the screen
-        glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        if (useRaytracing) {
+            // Raytracing mode
+            updateRaytracingScene();
+            renderRaytraced();
+        } else {
+            // Traditional rasterization mode
+            glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        // Update physics
-        updatePhysics(deltaTime);
+            updatePhysics(deltaTime);
 
-        // Update cube position from physics
-        if (dynamicActor) {
-            PxTransform transform = dynamicActor->getGlobalPose();
-            cubePos = glm::vec3(transform.p.x, transform.p.y, transform.p.z);
-        }
+            // Update camera
+            glm::mat4 view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
+            glm::mat4 projection = glm::perspective(glm::radians(45.0f), (float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f, 100.0f);
 
-        // Spawn new cubes
-        if (glfwGetTime() - lastCubeSpawnTime >= CUBE_SPAWN_COOLDOWN) {
-            spawnCube();
-        }
+            // Draw floor
+            glUseProgram(floorShaderProgram);
+            glm::mat4 floorModel = glm::mat4(1.0f);
+            floorModel = glm::translate(floorModel, glm::vec3(0.0f, -0.5f, 0.0f));
+            floorModel = glm::scale(floorModel, glm::vec3(20.0f, 0.1f, 20.0f));
+            glUniformMatrix4fv(glGetUniformLocation(floorShaderProgram, "model"), 1, GL_FALSE, &floorModel[0][0]);
+            glUniformMatrix4fv(glGetUniformLocation(floorShaderProgram, "view"), 1, GL_FALSE, &view[0][0]);
+            glUniformMatrix4fv(glGetUniformLocation(floorShaderProgram, "projection"), 1, GL_FALSE, &projection[0][0]);
+            glUniform3f(glGetUniformLocation(floorShaderProgram, "lightPos"), lightPos.x, lightPos.y, lightPos.z);
+            glUniform3f(glGetUniformLocation(floorShaderProgram, "viewPos"), cameraPos.x, cameraPos.y, cameraPos.z);
+            glUniform3f(glGetUniformLocation(floorShaderProgram, "lightColor"), lightColor.x, lightColor.y, lightColor.z);
 
-        // Update camera
-        glm::mat4 view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
-        glm::mat4 projection = glm::perspective(glm::radians(45.0f), (float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f, 100.0f);
+            glBindVertexArray(floorVAO);
+            glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
 
-        // Draw floor
-        glUseProgram(floorShaderProgram);
-        glm::mat4 floorModel = glm::mat4(1.0f);
-        floorModel = glm::translate(floorModel, glm::vec3(0.0f, -0.5f, 0.0f));
-        floorModel = glm::scale(floorModel, glm::vec3(20.0f, 0.1f, 20.0f));
-        glUniformMatrix4fv(glGetUniformLocation(floorShaderProgram, "model"), 1, GL_FALSE, &floorModel[0][0]);
-        glUniformMatrix4fv(glGetUniformLocation(floorShaderProgram, "view"), 1, GL_FALSE, &view[0][0]);
-        glUniformMatrix4fv(glGetUniformLocation(floorShaderProgram, "projection"), 1, GL_FALSE, &projection[0][0]);
-        glUniform3f(glGetUniformLocation(floorShaderProgram, "lightPos"), lightPos.x, lightPos.y, lightPos.z);
-        glUniform3f(glGetUniformLocation(floorShaderProgram, "viewPos"), cameraPos.x, cameraPos.y, cameraPos.z);
-        glUniform3f(glGetUniformLocation(floorShaderProgram, "lightColor"), lightColor.x, lightColor.y, lightColor.z);
+            // Draw spheres using material-based rendering
+            glUseProgram(shaderProgram);
+            glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "view"), 1, GL_FALSE, &view[0][0]);
+            glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "projection"), 1, GL_FALSE, &projection[0][0]);
+            glUniform3f(glGetUniformLocation(shaderProgram, "lightPos"), lightPos.x, lightPos.y, lightPos.z);
+            glUniform3f(glGetUniformLocation(shaderProgram, "viewPos"), cameraPos.x, cameraPos.y, cameraPos.z);
+            glUniform3f(glGetUniformLocation(shaderProgram, "lightColor"), lightColor.x, lightColor.y, lightColor.z);
 
-        glBindVertexArray(floorVAO);
-        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+            // Draw main sphere with current material
+            Material& currentMaterial = materials[currentMaterialIndex];
+            glm::mat4 model = glm::mat4(1.0f);
+            model = glm::translate(model, cubePos);
+            glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "model"), 1, GL_FALSE, &model[0][0]);
+            
+            // Set material properties
+            glUniform3f(glGetUniformLocation(shaderProgram, "material.ambient"), currentMaterial.ambient.x, currentMaterial.ambient.y, currentMaterial.ambient.z);
+            glUniform3f(glGetUniformLocation(shaderProgram, "material.diffuse"), currentMaterial.diffuse.x, currentMaterial.diffuse.y, currentMaterial.diffuse.z);
+            glUniform3f(glGetUniformLocation(shaderProgram, "material.specular"), currentMaterial.specular.x, currentMaterial.specular.y, currentMaterial.specular.z);
+            glUniform1f(glGetUniformLocation(shaderProgram, "material.shininess"), currentMaterial.shininess);
+            
+            // Enhanced rendering features
+            bool isMetallic = (currentMaterial.name.find("Gold") != std::string::npos ||
+                              currentMaterial.name.find("Silver") != std::string::npos ||
+                              currentMaterial.name.find("Copper") != std::string::npos ||
+                              currentMaterial.name.find("Bronze") != std::string::npos);
+            
+            float metallicFactor = isMetallic ? 0.9f : 0.1f;
+            float roughnessFactor = isMetallic ? 0.1f : 0.8f;
+            float ambientOcclusion = 0.1f; // Subtle AO
+            
+            glUniform1i(glGetUniformLocation(shaderProgram, "enableReflections"), true);
+            glUniform1i(glGetUniformLocation(shaderProgram, "enableSSAO"), false); // Keep simple for now
+            glUniform1f(glGetUniformLocation(shaderProgram, "ambientOcclusion"), ambientOcclusion);
+            glUniform1f(glGetUniformLocation(shaderProgram, "metallicFactor"), metallicFactor);
+            glUniform1f(glGetUniformLocation(shaderProgram, "roughnessFactor"), roughnessFactor);
+            glUniform1i(glGetUniformLocation(shaderProgram, "hasEnvironmentMap"), false); // No cubemap for now
+            
+            glUniform1i(glGetUniformLocation(shaderProgram, "useMaterial"), 1); // Enable material mode
+            glBindVertexArray(VAO);
+            glDrawElements(GL_TRIANGLES, sphereIndexCount, GL_UNSIGNED_INT, 0);
 
-        // Draw the cube
-        glUseProgram(shaderProgram);
-        glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "view"), 1, GL_FALSE, &view[0][0]);
-        glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "projection"), 1, GL_FALSE, &projection[0][0]);
-        glUniform3f(glGetUniformLocation(shaderProgram, "lightPos"), lightPos.x, lightPos.y, lightPos.z);
-        glUniform3f(glGetUniformLocation(shaderProgram, "viewPos"), cameraPos.x, cameraPos.y, cameraPos.z);
-        glUniform3f(glGetUniformLocation(shaderProgram, "lightColor"), lightColor.x, lightColor.y, lightColor.z);
+            // Draw spawned spheres with enhanced simple shading
+            for (const auto& cube : cubes) {
+                if (cube.isActive) {
+                    model = glm::mat4(1.0f);
+                    model = glm::translate(model, cube.position);
+                    glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "model"), 1, GL_FALSE, &model[0][0]);
+                    glUniform3f(glGetUniformLocation(shaderProgram, "objectColor"), 0.3f, 0.8f, 0.3f);
+                    glUniform1i(glGetUniformLocation(shaderProgram, "shadingModel"), 0); // Lambert
+                    glUniform1i(glGetUniformLocation(shaderProgram, "useMaterial"), 0); // Disable material mode
+                    
+                    // Enhanced features for spawned cubes
+                    glUniform1i(glGetUniformLocation(shaderProgram, "enableReflections"), false);
+                    glUniform1f(glGetUniformLocation(shaderProgram, "ambientOcclusion"), 0.2f);
+                    
+                    glDrawElements(GL_TRIANGLES, sphereIndexCount, GL_UNSIGNED_INT, 0);
+                }
+            }
 
-        glm::mat4 model = glm::mat4(1.0f);
-        model = glm::translate(model, cubePos);
-        glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "model"), 1, GL_FALSE, &model[0][0]);
-        glUniform3f(glGetUniformLocation(shaderProgram, "objectColor"), 0.8f, 0.3f, 0.3f);
-        glBindVertexArray(VAO);
-        glDrawArrays(GL_TRIANGLES, 0, 36);
-
-        // Draw bullets
-        for (const auto& bullet : bullets) {
-            if (bullet.active) {
-                model = glm::mat4(1.0f);
-                model = glm::translate(model, bullet.position);
-                model = glm::scale(model, glm::vec3(bulletRadius));
-                glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "model"), 1, GL_FALSE, &model[0][0]);
-                glUniform3f(glGetUniformLocation(shaderProgram, "objectColor"), 1.0f, 1.0f, 0.0f);
-                glDrawArrays(GL_TRIANGLES, 0, 36);
+            // Draw bullet spheres with enhanced shiny rendering
+            for (const auto& bullet : bullets) {
+                if (bullet.active) {
+                    model = glm::mat4(1.0f);
+                    model = glm::translate(model, bullet.position);
+                    model = glm::scale(model, glm::vec3(bulletRadius));
+                    glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "model"), 1, GL_FALSE, &model[0][0]);
+                    glUniform3f(glGetUniformLocation(shaderProgram, "objectColor"), 1.0f, 1.0f, 0.0f);
+                    glUniform1i(glGetUniformLocation(shaderProgram, "shadingModel"), 1); // Blinn-Phong
+                    glUniform1i(glGetUniformLocation(shaderProgram, "useMaterial"), 0); // Disable material mode
+                    
+                    // Enhanced features for bullets (make them shiny)
+                    glUniform1i(glGetUniformLocation(shaderProgram, "enableReflections"), true);
+                    glUniform1f(glGetUniformLocation(shaderProgram, "ambientOcclusion"), 0.0f);
+                    
+                    glDrawElements(GL_TRIANGLES, sphereIndexCount, GL_UNSIGNED_INT, 0);
+                }
             }
         }
 
-        // Swap buffers and poll events
         glfwSwapBuffers(window);
         glfwPollEvents();
     }
 
-    // Cleanup
     cleanupPhysX();
 
-    // Optional: de-allocate all resources once they've outlived their purpose:
-    // ------------------------------------------------------------------------
+    // Cleanup
+    if (useRaytracing) {
+        glDeleteTextures(1, &raytracingTexture);
+        glDeleteProgram(computeShader);
+        glDeleteProgram(fullscreenShader);
+        glDeleteVertexArrays(1, &fullscreenVAO);
+    }
+
     glDeleteVertexArrays(1, &VAO);
     glDeleteBuffers(1, &VBO);
+    glDeleteBuffers(1, &EBO);
     glDeleteProgram(shaderProgram);
     glDeleteProgram(floorShaderProgram);
 
-    // glfw: terminate, clearing all previously allocated GLFW resources.
-    // ------------------------------------------------------------------
     glfwTerminate();
     return 0;
 }
 
-// process all input: query GLFW whether relevant keys are pressed/released this frame and react accordingly
-// ---------------------------------------------------------------------------------------------------------
 void processInput(GLFWwindow *window, float deltaTime)
 {
     if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
         glfwSetWindowShouldClose(window, true);
+
+    // Material cycling
+    if (glfwGetKey(window, GLFW_KEY_M) == GLFW_PRESS && !materialKeyPressed) {
+        cycleMaterial();
+        materialKeyPressed = true;
+    }
+    if (glfwGetKey(window, GLFW_KEY_M) == GLFW_RELEASE) {
+        materialKeyPressed = false;
+    }
+
+    // Raytracing toggle
+    if (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS && !raytracingKeyPressed) {
+        useRaytracing = !useRaytracing;
+        std::cout << "Raytracing " << (useRaytracing ? "enabled" : "disabled") << std::endl;
+        raytracingKeyPressed = true;
+    }
+    if (glfwGetKey(window, GLFW_KEY_R) == GLFW_RELEASE) {
+        raytracingKeyPressed = false;
+    }
+
+    // Exposure controls
+    if (glfwGetKey(window, GLFW_KEY_EQUAL) == GLFW_PRESS) { // + key
+        exposure *= 1.02f;
+        std::cout << "Exposure: " << exposure << std::endl;
+    }
+    if (glfwGetKey(window, GLFW_KEY_MINUS) == GLFW_PRESS) { // - key
+        exposure *= 0.98f;
+        std::cout << "Exposure: " << exposure << std::endl;
+    }
 
     // Camera movement
     float cameraSpeed = 6.5f * deltaTime;
@@ -501,15 +594,17 @@ void processInput(GLFWwindow *window, float deltaTime)
         shootBullet();
     }
 
-    // Apply gravity
-    verticalVelocity += gravity * deltaTime;
-    cameraPos.y += verticalVelocity * deltaTime;
+    // Apply gravity (only in non-raytracing mode for simplicity)
+    if (!useRaytracing) {
+        verticalVelocity += gravity * deltaTime;
+        cameraPos.y += verticalVelocity * deltaTime;
 
-    // Ground collision
-    if (cameraPos.y <= 1.0f) {  // 1.0f is the height of the camera
-        cameraPos.y = 1.0f;
-        verticalVelocity = 0.0f;
-        isGrounded = true;
+        // Ground collision
+        if (cameraPos.y <= 1.0f) {
+            cameraPos.y = 1.0f;
+            verticalVelocity = 0.0f;
+            isGrounded = true;
+        }
     }
 
     // Physics-related input
@@ -518,16 +613,16 @@ void processInput(GLFWwindow *window, float deltaTime)
     }
 }
 
-// glfw: whenever the window size changed (by OS or user resize) this callback function executes
-// ---------------------------------------------------------------------------------------------
+void cycleMaterial() {
+    currentMaterialIndex = (currentMaterialIndex + 1) % materials.size();
+    std::cout << "Material changed to: " << materials[currentMaterialIndex].name << std::endl;
+}
+
 void framebuffer_size_callback(GLFWwindow* window, int width, int height)
 {
-    // make sure the viewport matches the new window dimensions; note that width and
-    // height will be significantly larger than specified on retina displays.
     glViewport(0, 0, width, height);
 }
 
-// Add this function before main()
 void mouse_callback(GLFWwindow* window, double xpos, double ypos)
 {
     if (firstMouse)
@@ -538,7 +633,7 @@ void mouse_callback(GLFWwindow* window, double xpos, double ypos)
     }
 
     float xoffset = xpos - lastX;
-    float yoffset = lastY - ypos; // reversed since y-coordinates go from bottom to top
+    float yoffset = lastY - ypos;
     lastX = xpos;
     lastY = ypos;
 
@@ -548,7 +643,6 @@ void mouse_callback(GLFWwindow* window, double xpos, double ypos)
     yaw += xoffset;
     pitch += yoffset;
 
-    // Make sure that when pitch is out of bounds, screen doesn't get flipped
     if (pitch > 89.0f)
         pitch = 89.0f;
     if (pitch < -89.0f)
@@ -561,15 +655,10 @@ void mouse_callback(GLFWwindow* window, double xpos, double ypos)
     cameraFront = glm::normalize(front);
 }
 
-// Utility function for loading shaders
-// Reads shader files, compiles them, links them into a shader program.
 GLuint loadShaders(const char * vertex_file_path,const char * fragment_file_path){
-
-	// Create the shaders
 	GLuint VertexShaderID = glCreateShader(GL_VERTEX_SHADER);
 	GLuint FragmentShaderID = glCreateShader(GL_FRAGMENT_SHADER);
 
-	// Read the Vertex Shader code from the file
 	std::string VertexShaderCode;
 	std::ifstream VertexShaderStream(vertex_file_path, std::ios::in);
 	if(VertexShaderStream.is_open()){
@@ -578,12 +667,10 @@ GLuint loadShaders(const char * vertex_file_path,const char * fragment_file_path
 		VertexShaderCode = sstr.str();
 		VertexShaderStream.close();
 	}else{
-		std::cerr << "Impossible to open " << vertex_file_path << ". Check path relative to executable." << std::endl;
-		getchar(); // Keep console window open
+		std::cerr << "Impossible to open " << vertex_file_path << std::endl;
         return 0;
 	}
 
-	// Read the Fragment Shader code from the file
 	std::string FragmentShaderCode;
 	std::ifstream FragmentShaderStream(fragment_file_path, std::ios::in);
 	if(FragmentShaderStream.is_open()){
@@ -592,8 +679,7 @@ GLuint loadShaders(const char * vertex_file_path,const char * fragment_file_path
 		FragmentShaderCode = sstr.str();
 		FragmentShaderStream.close();
 	} else {
-        std::cerr << "Impossible to open " << fragment_file_path << ". Check path relative to executable." << std::endl;
-		getchar(); // Keep console window open
+        std::cerr << "Impossible to open " << fragment_file_path << std::endl;
         return 0;
     }
 
@@ -605,15 +691,12 @@ GLuint loadShaders(const char * vertex_file_path,const char * fragment_file_path
 	glShaderSource(VertexShaderID, 1, &VertexSourcePointer , NULL);
 	glCompileShader(VertexShaderID);
 
-	// Check Vertex Shader
 	glGetShaderiv(VertexShaderID, GL_COMPILE_STATUS, &Result);
 	glGetShaderiv(VertexShaderID, GL_INFO_LOG_LENGTH, &InfoLogLength);
 	if ( InfoLogLength > 0 ){
 		std::vector<char> VertexShaderErrorMessage(InfoLogLength+1);
 		glGetShaderInfoLog(VertexShaderID, InfoLogLength, NULL, &VertexShaderErrorMessage[0]);
 		std::cerr << "Vertex Shader Error: " << &VertexShaderErrorMessage[0] << std::endl;
-        glDeleteShader(VertexShaderID); // Don't leak the shader.
-        glDeleteShader(FragmentShaderID);
 		return 0;
 	}
 
@@ -622,38 +705,29 @@ GLuint loadShaders(const char * vertex_file_path,const char * fragment_file_path
 	glShaderSource(FragmentShaderID, 1, &FragmentSourcePointer , NULL);
 	glCompileShader(FragmentShaderID);
 
-	// Check Fragment Shader
 	glGetShaderiv(FragmentShaderID, GL_COMPILE_STATUS, &Result);
 	glGetShaderiv(FragmentShaderID, GL_INFO_LOG_LENGTH, &InfoLogLength);
 	if ( InfoLogLength > 0 ){
 		std::vector<char> FragmentShaderErrorMessage(InfoLogLength+1);
 		glGetShaderInfoLog(FragmentShaderID, InfoLogLength, NULL, &FragmentShaderErrorMessage[0]);
 		std::cerr << "Fragment Shader Error: " << &FragmentShaderErrorMessage[0] << std::endl;
-        glDeleteShader(VertexShaderID); // Don't leak the shader.
-		glDeleteShader(FragmentShaderID); // Don't leak the shader.
 		return 0;
 	}
 
-	// Link the program
 	GLuint ProgramID = glCreateProgram();
 	glAttachShader(ProgramID, VertexShaderID);
 	glAttachShader(ProgramID, FragmentShaderID);
 	glLinkProgram(ProgramID);
 
-	// Check the program
 	glGetProgramiv(ProgramID, GL_LINK_STATUS, &Result);
 	glGetProgramiv(ProgramID, GL_INFO_LOG_LENGTH, &InfoLogLength);
 	if ( InfoLogLength > 0 ){
 		std::vector<char> ProgramErrorMessage(InfoLogLength+1);
 		glGetProgramInfoLog(ProgramID, InfoLogLength, NULL, &ProgramErrorMessage[0]);
 		std::cerr << "Linking Error: " << &ProgramErrorMessage[0] << std::endl;
-        glDeleteShader(VertexShaderID); // Don't leak the shaders.
-	    glDeleteShader(FragmentShaderID);
-        glDeleteProgram(ProgramID); // Don't leak the program.
 		return 0;
 	}
 
-	// Detach and delete the shaders as they are linked into our program now and no longer necessary
 	glDetachShader(ProgramID, VertexShaderID);
 	glDetachShader(ProgramID, FragmentShaderID);
 	glDeleteShader(VertexShaderID);
@@ -662,25 +736,82 @@ GLuint loadShaders(const char * vertex_file_path,const char * fragment_file_path
 	return ProgramID;
 }
 
-// Add this function before main()
+GLuint loadComputeShader(const char * compute_file_path) {
+    // Check if compute shaders are supported first
+    int major, minor;
+    glGetIntegerv(GL_MAJOR_VERSION, &major);
+    glGetIntegerv(GL_MINOR_VERSION, &minor);
+    
+    if (major < 4 || (major == 4 && minor < 3)) {
+        std::cerr << "Compute shaders require OpenGL 4.3+, current version: " << major << "." << minor << std::endl;
+        return 0;
+    }
+
+    GLuint ComputeShaderID = glCreateShader(0x91B9); // GL_COMPUTE_SHADER
+
+    std::string ComputeShaderCode;
+    std::ifstream ComputeShaderStream(compute_file_path, std::ios::in);
+    if(ComputeShaderStream.is_open()){
+        std::stringstream sstr;
+        sstr << ComputeShaderStream.rdbuf();
+        ComputeShaderCode = sstr.str();
+        ComputeShaderStream.close();
+    }else{
+        std::cerr << "Impossible to open " << compute_file_path << std::endl;
+        return 0;
+    }
+
+    GLint Result = GL_FALSE;
+    int InfoLogLength;
+
+    // Compile Compute Shader
+    char const* ComputeSourcePointer = ComputeShaderCode.c_str();
+    glShaderSource(ComputeShaderID, 1, &ComputeSourcePointer, NULL);
+    glCompileShader(ComputeShaderID);
+
+    glGetShaderiv(ComputeShaderID, GL_COMPILE_STATUS, &Result);
+    glGetShaderiv(ComputeShaderID, GL_INFO_LOG_LENGTH, &InfoLogLength);
+    if ( InfoLogLength > 0 ){
+        std::vector<char> ComputeShaderErrorMessage(InfoLogLength+1);
+        glGetShaderInfoLog(ComputeShaderID, InfoLogLength, NULL, &ComputeShaderErrorMessage[0]);
+        std::cerr << "Compute Shader Error: " << &ComputeShaderErrorMessage[0] << std::endl;
+        return 0;
+    }
+
+    GLuint ProgramID = glCreateProgram();
+    glAttachShader(ProgramID, ComputeShaderID);
+    glLinkProgram(ProgramID);
+
+    glGetProgramiv(ProgramID, GL_LINK_STATUS, &Result);
+    glGetProgramiv(ProgramID, GL_INFO_LOG_LENGTH, &InfoLogLength);
+    if ( InfoLogLength > 0 ){
+        std::vector<char> ProgramErrorMessage(InfoLogLength+1);
+        glGetProgramInfoLog(ProgramID, InfoLogLength, NULL, &ProgramErrorMessage[0]);
+        std::cerr << "Compute Shader Linking Error: " << &ProgramErrorMessage[0] << std::endl;
+        return 0;
+    }
+
+    glDetachShader(ProgramID, ComputeShaderID);
+    glDeleteShader(ComputeShaderID);
+
+    return ProgramID;
+}
+
 void createFloorMesh(std::vector<float>& vertices, std::vector<unsigned int>& indices) {
-    // Floor vertices (grey color)
     vertices = {
         // positions         // colors (grey)      // normals
-        -10.0f, 0.0f, -10.0f,  0.3f, 0.3f, 0.3f,  0.0f, 1.0f, 0.0f,  // bottom left
-         10.0f, 0.0f, -10.0f,  0.3f, 0.3f, 0.3f,  0.0f, 1.0f, 0.0f,  // bottom right
-         10.0f, 0.0f,  10.0f,  0.3f, 0.3f, 0.3f,  0.0f, 1.0f, 0.0f,  // top right
-        -10.0f, 0.0f,  10.0f,  0.3f, 0.3f, 0.3f,  0.0f, 1.0f, 0.0f   // top left
+        -10.0f, 0.0f, -10.0f,  0.3f, 0.3f, 0.3f,  0.0f, 1.0f, 0.0f,
+         10.0f, 0.0f, -10.0f,  0.3f, 0.3f, 0.3f,  0.0f, 1.0f, 0.0f,
+         10.0f, 0.0f,  10.0f,  0.3f, 0.3f, 0.3f,  0.0f, 1.0f, 0.0f,
+        -10.0f, 0.0f,  10.0f,  0.3f, 0.3f, 0.3f,  0.0f, 1.0f, 0.0f
     };
 
-    // Floor indices
     indices = {
-        0, 1, 2,  // first triangle
-        2, 3, 0   // second triangle
+        0, 1, 2,
+        2, 3, 0
     };
 }
 
-// Remove lighting variables and update the createSphereMesh function
 void createSphereMesh(std::vector<float>& vertices, std::vector<unsigned int>& indices, float radius, int segments) {
     vertices.clear();
     indices.clear();
@@ -700,10 +831,16 @@ void createSphereMesh(std::vector<float>& vertices, std::vector<unsigned int>& i
             vertices.push_back(x);
             vertices.push_back(y);
             vertices.push_back(z);
-            // Color (bright white)
-            vertices.push_back(1.0f);
-            vertices.push_back(1.0f);
-            vertices.push_back(1.0f);
+            
+            // Normal (same as position for unit sphere, then scaled)
+            glm::vec3 normal = glm::normalize(glm::vec3(x, y, z));
+            vertices.push_back(normal.x);
+            vertices.push_back(normal.y);
+            vertices.push_back(normal.z);
+            
+            // Texture coordinates
+            vertices.push_back((float)j / segments);
+            vertices.push_back((float)i / segments);
         }
     }
 
@@ -737,87 +874,31 @@ void shootBullet() {
     bullet.active = true;
     bullet.timeAlive = 0.0f;
 
-    // Create PhysX rigid body for bullet
-    PxTransform transform(PxVec3(bullet.position.x, bullet.position.y, bullet.position.z));
-    bullet.actor = gPhysics->createRigidDynamic(transform);
-    
-    // Create sphere shape for bullet
-    PxSphereGeometry sphereGeom(bulletRadius);
-    PxShape* shape = gPhysics->createShape(sphereGeom, *gMaterial, true);
-    bullet.actor->attachShape(*shape);
-    shape->release();
+#if PHYSX_ENABLED
+    // PhysX implementation would go here when PhysX is available
+#else
+    // Simple physics fallback
+    bullet.simplePhysics.position = bullet.position;
+    bullet.simplePhysics.velocity = bullet.direction * bullet.speed;
+    bullet.simplePhysics.isActive = true;
+#endif
 
-    // Set bullet properties
-    bullet.actor->setMass(0.05f);
-    bullet.actor->setLinearDamping(0.01f);
-    bullet.actor->setAngularDamping(0.1f);
-    
-    // Set initial velocity
-    PxVec3 velocity(bullet.direction.x * bullet.speed,
-                    bullet.direction.y * bullet.speed,
-                    bullet.direction.z * bullet.speed);
-    bullet.actor->setLinearVelocity(velocity);
-
-    // Add to scene
-    gScene->addActor(*bullet.actor);
     bullets.push_back(bullet);
 }
 
 void initPhysX() {
-    gFoundation = PxCreateFoundation(PX_PHYSICS_VERSION, gAllocator, gErrorCallback);
-    if (!gFoundation) {
-        throw std::runtime_error("PxCreateFoundation failed!");
-    }
-
-    // Create PhysX Visual Debugger
-    gPvd = PxCreatePvd(*gFoundation);
-    PxPvdTransport* transport = PxDefaultPvdSocketTransportCreate("127.0.0.1", 5425, 10);
-    gPvd->connect(*transport, PxPvdInstrumentationFlag::eALL);
-
-    // Create Physics
-    gPhysics = PxCreatePhysics(PX_PHYSICS_VERSION, *gFoundation, PxTolerancesScale(), true, gPvd);
-    if (!gPhysics) {
-        throw std::runtime_error("PxCreatePhysics failed!");
-    }
-
-    // Create scene with improved settings
-    PxSceneDesc sceneDesc(gPhysics->getTolerancesScale());
-    sceneDesc.gravity = PxVec3(0.0f, -9.81f, 0.0f);
-    sceneDesc.filterShader = PxDefaultSimulationFilterShader;
-    sceneDesc.cpuDispatcher = PxDefaultCpuDispatcherCreate(4);  // Use 4 threads for better performance
-    sceneDesc.ccdThreshold = 0.0001f;  // Enable CCD with small threshold for better collision
-    gScene = gPhysics->createScene(sceneDesc);
-
-    // Enable CCD flags
-    gScene->setFlag(PxSceneFlag::eENABLE_CCD, true);
-    gScene->setFlag(PxSceneFlag::eENABLE_ENHANCED_DETERMINISM, true);  // More accurate physics
-
-    // Create material with better physics properties
-    gMaterial = gPhysics->createMaterial(0.6f, 0.4f, 0.5f);  // Static friction, dynamic friction, restitution
-
-    // Create ground plane at y=0
-    PxTransform groundPose = PxTransform(PxVec3(0.0f, 0.0f, 0.0f), PxQuat(PxHalfPi, PxVec3(0.0f, 0.0f, 1.0f)));
-    PxRigidStatic* groundPlane = gPhysics->createRigidStatic(groundPose);
-    PxShape* shape = gPhysics->createShape(PxPlaneGeometry(), *gMaterial);
-    groundPlane->attachShape(*shape);
-    shape->release();
-    gScene->addActor(*groundPlane);
+#if PHYSX_ENABLED
+    // PhysX initialization would go here when PhysX is available
+#else
+    // Simple physics - no initialization needed
+    std::cout << "Using simple physics fallback" << std::endl;
+#endif
 }
 
 void cleanupPhysX() {
-    // Release PhysX objects in reverse order
-    for (auto& cube : cubes) {
-        if (cube.actor) {
-            cube.actor->release();
-        }
-    }
-    cubes.clear();
-
-    if (gScene) gScene->release();
-    if (gDispatcher) gDispatcher->release();
-    if (gMaterial) gMaterial->release();
-    if (gPhysics) gPhysics->release();
-    if (gFoundation) gFoundation->release();
+#if PHYSX_ENABLED
+    // PhysX cleanup would go here when PhysX is available
+#endif
 }
 
 void spawnCube() {
@@ -826,68 +907,275 @@ void spawnCube() {
     }
 
     Cube cube;
-    // Spawn cube where player is looking
     glm::vec3 spawnPos = cameraPos + cameraFront * 3.0f;
     cube.position = spawnPos;
     cube.isActive = true;
 
-    // Create PhysX actor for cube
-    PxTransform transform(PxVec3(spawnPos.x, spawnPos.y, spawnPos.z));
-    PxRigidDynamic* actor = gPhysics->createRigidDynamic(transform);
-    
-    // Create box shape
-    PxBoxGeometry boxGeom(CUBE_SIZE/2, CUBE_SIZE/2, CUBE_SIZE/2);
-    PxShape* shape = gPhysics->createShape(boxGeom, *gMaterial, true);
-    actor->attachShape(*shape);
-    shape->release();
+#if PHYSX_ENABLED
+    // PhysX implementation would go here when PhysX is available
+#else
+    // Simple physics fallback
+    cube.simplePhysics.position = spawnPos;
+    cube.simplePhysics.velocity = cameraFront * CUBE_INITIAL_SPEED;
+    cube.simplePhysics.isActive = true;
+#endif
 
-    // Set cube properties
-    actor->setMass(CUBE_MASS);
-    actor->setLinearDamping(0.1f);
-    actor->setAngularDamping(0.1f);
-    
-    // Add initial velocity in look direction
-    PxVec3 velocity(cameraFront.x * CUBE_INITIAL_SPEED,
-                    cameraFront.y * CUBE_INITIAL_SPEED,
-                    cameraFront.z * CUBE_INITIAL_SPEED);
-    actor->setLinearVelocity(velocity);
-
-    // Enable CCD for better collision
-    actor->setRigidBodyFlag(PxRigidBodyFlag::eENABLE_CCD, true);
-
-    cube.actor = actor;
-    gScene->addActor(*actor);
     cubes.push_back(cube);
 }
 
-void updatePhysics(float deltaTime) {
-    // Step PhysX simulation
-    gScene->simulate(deltaTime);
-    gScene->fetchResults(true);
-
-    // Update bullet positions and remove dead bullets
+void updateSimplePhysics(float deltaTime) {
+    const float floorY = -0.5f;
+    const float bounceRestitution = 0.3f;
+    
+    // Update bullets
     for (auto it = bullets.begin(); it != bullets.end();) {
         it->timeAlive += deltaTime;
         
-        if (it->timeAlive >= it->lifetime || !it->active) {
-            if (it->actor) {
-                gScene->removeActor(*it->actor);
-                it->actor->release();
-            }
+        if (it->timeAlive >= it->lifetime) {
             it = bullets.erase(it);
-        } else {
-            // Update bullet position from PhysX
-            PxTransform transform = it->actor->getGlobalPose();
-            it->position = glm::vec3(transform.p.x, transform.p.y, transform.p.z);
-            ++it;
+            continue;
+        }
+
+        // Apply gravity
+        it->simplePhysics.velocity.y += gravity * deltaTime;
+        
+        // Update position
+        it->simplePhysics.position += it->simplePhysics.velocity * deltaTime;
+        it->position = it->simplePhysics.position;
+        
+        // Floor collision
+        if (it->position.y < floorY) {
+            it->position.y = floorY;
+            it->simplePhysics.position.y = floorY;
+            it->simplePhysics.velocity.y *= -bounceRestitution;
+        }
+        
+        ++it;
+    }
+    
+    // Update cubes
+    for (auto& cube : cubes) {
+        if (cube.isActive) {
+            // Apply gravity
+            cube.simplePhysics.velocity.y += gravity * deltaTime;
+            
+            // Update position
+            cube.simplePhysics.position += cube.simplePhysics.velocity * deltaTime;
+            cube.position = cube.simplePhysics.position;
+            
+            // Floor collision
+            if (cube.position.y < floorY + CUBE_SIZE/2) {
+                cube.position.y = floorY + CUBE_SIZE/2;
+                cube.simplePhysics.position.y = cube.position.y;
+                cube.simplePhysics.velocity.y *= -bounceRestitution;
+                
+                // Add some friction
+                cube.simplePhysics.velocity.x *= 0.95f;
+                cube.simplePhysics.velocity.z *= 0.95f;
+            }
         }
     }
 
-    // Update cube positions
-    for (auto& cube : cubes) {
-        if (cube.isActive && cube.actor) {
-            PxTransform transform = cube.actor->getGlobalPose();
-            cube.position = glm::vec3(transform.p.x, transform.p.y, transform.p.z);
+    // Update main cube (simple falling)
+    static float mainCubeVelocity = 0.0f;
+    mainCubeVelocity += gravity * deltaTime;
+    cubePos.y += mainCubeVelocity * deltaTime;
+    
+    if (cubePos.y < floorY + CUBE_SIZE/2) {
+        cubePos.y = floorY + CUBE_SIZE/2;
+        mainCubeVelocity *= -bounceRestitution;
+    }
+}
+
+void updatePhysics(float deltaTime) {
+#if PHYSX_ENABLED
+    // PhysX physics update would go here when PhysX is available
+#else
+    // Use simple physics fallback
+    updateSimplePhysics(deltaTime);
+#endif
+}
+
+void initRaytracing() {
+    // Create raytracing texture
+    glGenTextures(1, &raytracingTexture);
+    glBindTexture(GL_TEXTURE_2D, raytracingTexture);
+    glTexImage2D(GL_TEXTURE_2D, 0, 0x8814, SCR_WIDTH, SCR_HEIGHT, 0, GL_RGBA, GL_FLOAT, NULL); // GL_RGBA32F = 0x8814
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    
+    // Bind as image texture for compute shader
+    glBindImageTexture(0, raytracingTexture, 0, GL_FALSE, 0, 0x8CA3, 0x8814); // GL_READ_WRITE = 0x8CA3, GL_RGBA32F = 0x8814
+}
+
+void createFullscreenQuad() {
+    float quadVertices[] = {
+        // positions   // texCoords
+        -1.0f,  1.0f,  0.0f, 1.0f,
+        -1.0f, -1.0f,  0.0f, 0.0f,
+         1.0f, -1.0f,  1.0f, 0.0f,
+
+        -1.0f,  1.0f,  0.0f, 1.0f,
+         1.0f, -1.0f,  1.0f, 0.0f,
+         1.0f,  1.0f,  1.0f, 1.0f
+    };
+
+    unsigned int quadVBO;
+    glGenVertexArrays(1, &fullscreenVAO);
+    glGenBuffers(1, &quadVBO);
+    glBindVertexArray(fullscreenVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, quadVBO);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(quadVertices), &quadVertices, GL_STATIC_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)(2 * sizeof(float)));
+}
+
+RTMaterial convertToRTMaterial(const Material& mat, int type) {
+    RTMaterial rtMat;
+    rtMat.albedo = mat.diffuse;
+    rtMat.specular = mat.specular;
+    rtMat.shininess = mat.shininess;
+    rtMat.metallic = (type == 1) ? 0.8f : 0.0f;
+    rtMat.roughness = 1.0f / sqrt(mat.shininess);
+    rtMat.ior = 1.5f;
+    rtMat.type = type;
+    return rtMat;
+}
+
+void updateRaytracingScene() {
+    updatePhysics(deltaTime);
+    
+    // Update RT spheres based on current scene
+    rtSpheres.clear();
+    
+    // Add main sphere
+    RTSphere mainSphere;
+    mainSphere.center = cubePos;
+    mainSphere.radius = 0.5f;
+    
+    // Determine material type based on current material
+    int materialType = 0; // Default to diffuse
+    if (materials[currentMaterialIndex].name.find("Gold") != std::string::npos ||
+        materials[currentMaterialIndex].name.find("Silver") != std::string::npos ||
+        materials[currentMaterialIndex].name.find("Copper") != std::string::npos ||
+        materials[currentMaterialIndex].name.find("Bronze") != std::string::npos) {
+        materialType = 1; // Metal
+    }
+    if (materials[currentMaterialIndex].name.find("Emerald") != std::string::npos) {
+        materialType = 2; // Glass
+    }
+    
+    mainSphere.material = convertToRTMaterial(materials[currentMaterialIndex], materialType);
+    rtSpheres.push_back(mainSphere);
+    
+    // Add spawned cubes
+    for (const auto& cube : cubes) {
+        if (cube.isActive) {
+            RTSphere sphere;
+            sphere.center = cube.position;
+            sphere.radius = CUBE_SIZE * 0.5f;
+            sphere.material = convertToRTMaterial(materials[2], 0); // Green diffuse
+            sphere.material.albedo = glm::vec3(0.3f, 0.8f, 0.3f);
+            rtSpheres.push_back(sphere);
         }
     }
+    
+    // Add bullets
+    for (const auto& bullet : bullets) {
+        if (bullet.active) {
+            RTSphere sphere;
+            sphere.center = bullet.position;
+            sphere.radius = bulletRadius;
+            sphere.material = convertToRTMaterial(materials[1], 1); // Gold metal
+            sphere.material.albedo = glm::vec3(1.0f, 1.0f, 0.0f);
+            rtSpheres.push_back(sphere);
+        }
+    }
+}
+
+void renderRaytraced() {
+    // Use compute shader for raytracing
+    glUseProgram(computeShader);
+    
+    // Set camera uniforms
+    glUniform3f(glGetUniformLocation(computeShader, "cameraPos"), cameraPos.x, cameraPos.y, cameraPos.z);
+    glUniform3f(glGetUniformLocation(computeShader, "cameraFront"), cameraFront.x, cameraFront.y, cameraFront.z);
+    glUniform3f(glGetUniformLocation(computeShader, "cameraUp"), cameraUp.x, cameraUp.y, cameraUp.z);
+    glUniform3f(glGetUniformLocation(computeShader, "cameraRight"), cameraRight.x, cameraRight.y, cameraRight.z);
+    glUniform1f(glGetUniformLocation(computeShader, "fov"), glm::radians(45.0f));
+    glUniform1f(glGetUniformLocation(computeShader, "aspectRatio"), (float)SCR_WIDTH / (float)SCR_HEIGHT);
+    glUniform1i(glGetUniformLocation(computeShader, "maxBounces"), maxBounces);
+    glUniform1i(glGetUniformLocation(computeShader, "numSamples"), numSamples);
+    glUniform3f(glGetUniformLocation(computeShader, "lightPos"), lightPos.x, lightPos.y, lightPos.z);
+    glUniform3f(glGetUniformLocation(computeShader, "lightColor"), lightColor.x, lightColor.y, lightColor.z);
+    glUniform1f(glGetUniformLocation(computeShader, "time"), static_cast<float>(glfwGetTime()));
+    
+    // Set scene uniforms
+    glUniform1i(glGetUniformLocation(computeShader, "numSpheres"), static_cast<int>(rtSpheres.size()));
+    
+    // Upload sphere data (simplified - in a real implementation you'd use uniform buffers)
+    for (int i = 0; i < std::min(static_cast<int>(rtSpheres.size()), 20); i++) {
+        std::string prefix = "spheres[" + std::to_string(i) + "]";
+        glUniform3f(glGetUniformLocation(computeShader, (prefix + ".center").c_str()), 
+                   rtSpheres[i].center.x, rtSpheres[i].center.y, rtSpheres[i].center.z);
+        glUniform1f(glGetUniformLocation(computeShader, (prefix + ".radius").c_str()), 
+                   rtSpheres[i].radius);
+        glUniform3f(glGetUniformLocation(computeShader, (prefix + ".material.albedo").c_str()), 
+                   rtSpheres[i].material.albedo.x, rtSpheres[i].material.albedo.y, rtSpheres[i].material.albedo.z);
+        glUniform3f(glGetUniformLocation(computeShader, (prefix + ".material.specular").c_str()), 
+                   rtSpheres[i].material.specular.x, rtSpheres[i].material.specular.y, rtSpheres[i].material.specular.z);
+        glUniform1f(glGetUniformLocation(computeShader, (prefix + ".material.shininess").c_str()), 
+                   rtSpheres[i].material.shininess);
+        glUniform1f(glGetUniformLocation(computeShader, (prefix + ".material.metallic").c_str()), 
+                   rtSpheres[i].material.metallic);
+        glUniform1f(glGetUniformLocation(computeShader, (prefix + ".material.roughness").c_str()), 
+                   rtSpheres[i].material.roughness);
+        glUniform1f(glGetUniformLocation(computeShader, (prefix + ".material.ior").c_str()), 
+                   rtSpheres[i].material.ior);
+        glUniform1i(glGetUniformLocation(computeShader, (prefix + ".material.type").c_str()), 
+                   rtSpheres[i].material.type);
+    }
+    
+    // Set floor uniforms
+    glUniform3f(glGetUniformLocation(computeShader, "floorNormal"), 0.0f, 1.0f, 0.0f);
+    glUniform1f(glGetUniformLocation(computeShader, "floorDistance"), 0.5f);
+    
+    RTMaterial floorMat;
+    floorMat.albedo = glm::vec3(0.3f, 0.3f, 0.3f);
+    floorMat.specular = glm::vec3(0.2f, 0.2f, 0.2f);
+    floorMat.shininess = 16.0f;
+    floorMat.metallic = 0.0f;
+    floorMat.roughness = 0.8f;
+    floorMat.ior = 1.0f;
+    floorMat.type = 0;
+    
+    glUniform3f(glGetUniformLocation(computeShader, "floorMaterial.albedo"), 
+               floorMat.albedo.x, floorMat.albedo.y, floorMat.albedo.z);
+    glUniform3f(glGetUniformLocation(computeShader, "floorMaterial.specular"), 
+               floorMat.specular.x, floorMat.specular.y, floorMat.specular.z);
+    glUniform1f(glGetUniformLocation(computeShader, "floorMaterial.shininess"), floorMat.shininess);
+    glUniform1f(glGetUniformLocation(computeShader, "floorMaterial.metallic"), floorMat.metallic);
+    glUniform1f(glGetUniformLocation(computeShader, "floorMaterial.roughness"), floorMat.roughness);
+    glUniform1f(glGetUniformLocation(computeShader, "floorMaterial.ior"), floorMat.ior);
+    glUniform1i(glGetUniformLocation(computeShader, "floorMaterial.type"), floorMat.type);
+    
+    // Dispatch compute shader
+    glDispatchCompute((SCR_WIDTH + 15) / 16, (SCR_HEIGHT + 15) / 16, 1);
+    glMemoryBarrier(0x00000008); // GL_SHADER_IMAGE_ACCESS_BARRIER_BIT = 0x00000008
+    
+    // Render fullscreen quad with the raytraced result
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    glUseProgram(fullscreenShader);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, raytracingTexture);
+    glUniform1i(glGetUniformLocation(fullscreenShader, "screenTexture"), 0);
+    glUniform1f(glGetUniformLocation(fullscreenShader, "exposure"), exposure);
+    glUniform1i(glGetUniformLocation(fullscreenShader, "enableToneMapping"), enableToneMapping);
+    
+    glBindVertexArray(fullscreenVAO);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
 }

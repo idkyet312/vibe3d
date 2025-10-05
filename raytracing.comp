@@ -1,0 +1,211 @@
+#version 430
+
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(rgba32f, binding = 0) uniform image2D imgOutput;
+
+// Camera uniforms
+uniform vec3 cameraPos;
+uniform vec3 cameraFront;
+uniform vec3 cameraUp;
+uniform vec3 cameraRight;
+uniform float fov;
+uniform float aspectRatio;
+
+// Scene uniforms
+uniform vec3 lightPos;
+uniform vec3 lightColor;
+uniform float time;
+uniform int maxBounces;
+uniform int numSamples;
+
+// Material structure
+struct Material {
+    vec3 albedo;
+    vec3 specular;
+    float shininess;
+    float metallic;
+    float roughness;
+    float ior;
+    int type; // 0 = diffuse, 1 = metal, 2 = glass
+};
+
+// Sphere structure
+struct Sphere {
+    vec3 center;
+    float radius;
+    Material material;
+};
+
+// Scene data
+uniform int numSpheres;
+uniform Sphere spheres[20];
+
+// Floor data
+uniform vec3 floorNormal;
+uniform float floorDistance;
+uniform Material floorMaterial;
+
+struct Ray {
+    vec3 origin;
+    vec3 direction;
+};
+
+struct HitInfo {
+    bool hit;
+    float t;
+    vec3 point;
+    vec3 normal;
+    Material material;
+};
+
+// Simple raytracing functions
+HitInfo intersectSphere(Ray ray, Sphere sphere) {
+    HitInfo hit;
+    hit.hit = false;
+    
+    vec3 oc = ray.origin - sphere.center;
+    float a = dot(ray.direction, ray.direction);
+    float b = 2.0 * dot(oc, ray.direction);
+    float c = dot(oc, oc) - sphere.radius * sphere.radius;
+    
+    float discriminant = b * b - 4 * a * c;
+    
+    if (discriminant >= 0) {
+        float t = (-b - sqrt(discriminant)) / (2.0 * a);
+        if (t > 0.001) {
+            hit.hit = true;
+            hit.t = t;
+            hit.point = ray.origin + t * ray.direction;
+            hit.normal = normalize(hit.point - sphere.center);
+            hit.material = sphere.material;
+        }
+    }
+    
+    return hit;
+}
+
+HitInfo intersectFloor(Ray ray) {
+    HitInfo hit;
+    hit.hit = false;
+    
+    float denom = dot(floorNormal, ray.direction);
+    if (abs(denom) > 0.001) {
+        float t = -(dot(floorNormal, ray.origin) + floorDistance) / denom;
+        if (t > 0.001) {
+            hit.hit = true;
+            hit.t = t;
+            hit.point = ray.origin + t * ray.direction;
+            hit.normal = floorNormal;
+            hit.material = floorMaterial;
+        }
+    }
+    
+    return hit;
+}
+
+HitInfo intersectScene(Ray ray) {
+    HitInfo closestHit;
+    closestHit.hit = false;
+    closestHit.t = 1000000.0;
+    
+    // Check spheres
+    for (int i = 0; i < numSpheres && i < 20; i++) {
+        HitInfo hit = intersectSphere(ray, spheres[i]);
+        if (hit.hit && hit.t < closestHit.t) {
+            closestHit = hit;
+        }
+    }
+    
+    // Check floor
+    HitInfo floorHit = intersectFloor(ray);
+    if (floorHit.hit && floorHit.t < closestHit.t) {
+        closestHit = floorHit;
+    }
+    
+    return closestHit;
+}
+
+vec3 calculateLighting(HitInfo hit, vec3 viewDir) {
+    vec3 lightDir = normalize(lightPos - hit.point);
+    vec3 reflectDir = reflect(-lightDir, hit.normal);
+    
+    // Ambient
+    vec3 ambient = 0.1 * hit.material.albedo;
+    
+    // Diffuse
+    float diff = max(dot(hit.normal, lightDir), 0.0);
+    vec3 diffuse = diff * lightColor * hit.material.albedo;
+    
+    // Specular
+    float spec = pow(max(dot(viewDir, reflectDir), 0.0), hit.material.shininess);
+    vec3 specular = spec * lightColor * hit.material.specular;
+    
+    return ambient + diffuse + specular;
+}
+
+vec3 rayTrace(Ray ray) {
+    vec3 color = vec3(0.0);
+    vec3 attenuation = vec3(1.0);
+    
+    for (int bounce = 0; bounce < maxBounces; bounce++) {
+        HitInfo hit = intersectScene(ray);
+        
+        if (!hit.hit) {
+            // Sky color
+            color += attenuation * vec3(0.5, 0.7, 1.0);
+            break;
+        }
+        
+        vec3 viewDir = normalize(-ray.direction);
+        vec3 lighting = calculateLighting(hit, viewDir);
+        
+        color += attenuation * lighting * 0.3;
+        
+        // Simple reflection for metals
+        if (hit.material.type == 1) {
+            ray.origin = hit.point + hit.normal * 0.001;
+            ray.direction = reflect(ray.direction, hit.normal);
+            attenuation *= hit.material.specular * 0.8;
+        } else {
+            break;
+        }
+        
+        // Prevent infinite bounces
+        if (length(attenuation) < 0.01) break;
+    }
+    
+    return color;
+}
+
+void main() {
+    ivec2 pixelCoords = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 imageSize = imageSize(imgOutput);
+    
+    if (pixelCoords.x >= imageSize.x || pixelCoords.y >= imageSize.y) {
+        return;
+    }
+    
+    vec2 uv = (vec2(pixelCoords) + 0.5) / vec2(imageSize);
+    uv = uv * 2.0 - 1.0;
+    uv.x *= aspectRatio;
+    
+    // Create camera ray
+    float tanHalfFov = tan(fov * 0.5);
+    vec3 rayDir = normalize(
+        cameraFront + 
+        uv.x * tanHalfFov * cameraRight + 
+        uv.y * tanHalfFov * cameraUp
+    );
+    
+    Ray ray;
+    ray.origin = cameraPos;
+    ray.direction = rayDir;
+    
+    vec3 color = rayTrace(ray);
+    
+    // Simple tone mapping
+    color = color / (color + vec3(1.0));
+    color = pow(color, vec3(1.0/2.2));
+    
+    imageStore(imgOutput, pixelCoords, vec4(color, 1.0));
+}
