@@ -849,6 +849,134 @@ void GraphicsManager::cleanupForwardPlus() {
     if (tiledForwardShader) glDeleteProgram(tiledForwardShader);
 }
 
+void GraphicsManager::renderForwardPass(const glm::mat4& view, const glm::mat4& projection, 
+                                        const std::vector<RTSphere>& spheres,
+                                        const std::vector<Cube>& cubes,
+                                        const std::vector<Bullet>& bullets,
+                                        const glm::vec3& mainObjectPos,
+                                        const Material& currentMaterial) {
+    // Forward rendering: render objects front-to-back for early Z rejection
+    
+    // 1. Render opaque objects first (front to back for performance)
+    renderOpaqueObjects(view, projection, spheres, cubes, bullets, mainObjectPos, currentMaterial);
+    
+    // 2. Render transparent objects last (back to front for correct blending)
+    renderTransparentObjects(view, projection, spheres, cubes, bullets);
+}
+
+void GraphicsManager::renderOpaqueObjects(const glm::mat4& view, const glm::mat4& projection,
+                                         const std::vector<RTSphere>& spheres,
+                                         const std::vector<Cube>& cubes,
+                                         const std::vector<Bullet>& bullets,
+                                         const glm::vec3& mainObjectPos,
+                                         const Material& currentMaterial) {
+    // Disable blending for opaque objects
+    glDisable(GL_BLEND);
+    
+    // Set global render state once for all objects
+    setGlobalRenderState(view, projection);
+    
+    // Render floor first (usually largest/farthest object)
+    glm::mat4 floorModel = glm::mat4(1.0f);
+    floorModel = glm::translate(floorModel, glm::vec3(0.0f, -0.5f, 0.0f));
+    floorModel = glm::scale(floorModel, glm::vec3(20.0f, 0.1f, 20.0f));
+    renderFloor(floorModel, view, projection);
+    
+    // Render main sphere
+    glm::mat4 mainModel = glm::mat4(1.0f);
+    mainModel = glm::translate(mainModel, mainObjectPos);
+    renderSphere(mainModel, view, projection, currentMaterial, true);
+    
+    // Render spawned cubes (opaque)
+    for (const auto& cube : cubes) {
+        if (cube.isActive) {
+            glm::mat4 model = glm::mat4(1.0f);
+            model = glm::translate(model, cube.position);
+            renderSpawned(model, view, projection);
+        }
+    }
+    
+    // Render bullets (small objects, render last among opaques)
+    for (const auto& bullet : bullets) {
+        if (bullet.active) {
+            glm::mat4 model = glm::mat4(1.0f);
+            model = glm::translate(model, bullet.position);
+            model = glm::scale(model, glm::vec3(0.05f));
+            renderBullet(model, view, projection);
+        }
+    }
+}
+
+void GraphicsManager::renderTransparentObjects(const glm::mat4& view, const glm::mat4& projection,
+                                              const std::vector<RTSphere>& spheres,
+                                              const std::vector<Cube>& cubes,
+                                              const std::vector<Bullet>& bullets) {
+    // Enable blending for transparent objects
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    
+    // Disable depth writing for transparent objects (but keep depth testing)
+    glDepthMask(GL_FALSE);
+    
+    // TODO: Sort transparent objects back-to front and render
+    // For now, no transparent objects in this scene
+    
+    // Re-enable depth writing
+    glDepthMask(GL_TRUE);
+}
+
+void GraphicsManager::setGlobalRenderState(const glm::mat4& view, const glm::mat4& projection) {
+    // Set shared uniforms that don't change per object in forward rendering
+    
+    // Update view position for all shaders (for specular calculations)
+    glm::vec3 viewPos = glm::vec3(glm::inverse(view)[3]);
+    
+    // Set for main shader
+    glUseProgram(mainShaderProgram);
+    glUniformMatrix4fv(glGetUniformLocation(mainShaderProgram, "view"), 1, GL_FALSE, &view[0][0]);
+    glUniformMatrix4fv(glGetUniformLocation(mainShaderProgram, "projection"), 1, GL_FALSE, &projection[0][0]);
+    glUniform3f(glGetUniformLocation(mainShaderProgram, "viewPos"), viewPos.x, viewPos.y, viewPos.z);
+    glUniform3f(glGetUniformLocation(mainShaderProgram, "lightPos"), currentLightPos.x, currentLightPos.y, currentLightPos.z);
+    glUniform3f(glGetUniformLocation(mainShaderProgram, "lightColor"), currentLightColor.x, currentLightColor.y, currentLightColor.z);
+    
+    // Set for floor shader
+    glUseProgram(floorShaderProgram);
+    glUniformMatrix4fv(glGetUniformLocation(floorShaderProgram, "view"), 1, GL_FALSE, &view[0][0]);
+    glUniformMatrix4fv(glGetUniformLocation(floorShaderProgram, "projection"), 1, GL_FALSE, &projection[0][0]);
+    glUniform3f(glGetUniformLocation(floorShaderProgram, "viewPos"), viewPos.x, viewPos.y, viewPos.z);
+    glUniform3f(glGetUniformLocation(floorShaderProgram, "lightPos"), currentLightPos.x, currentLightPos.y, currentLightPos.z);
+    glUniform3f(glGetUniformLocation(floorShaderProgram, "lightColor"), currentLightColor.x, currentLightColor.y, currentLightColor.z);
+}
+
+void GraphicsManager::setMaterialUniforms(GLuint program, const Material& material, bool useEnhancedFeatures) {
+    // Set material properties
+    glUniform3f(glGetUniformLocation(program, "material.ambient"), material.ambient.x, material.ambient.y, material.ambient.z);
+    glUniform3f(glGetUniformLocation(program, "material.diffuse"), material.diffuse.x, material.diffuse.y, material.diffuse.z);
+    glUniform3f(glGetUniformLocation(program, "material.specular"), material.specular.x, material.specular.y, material.specular.z);
+    glUniform1f(glGetUniformLocation(program, "material.shininess"), material.shininess);
+    
+    if (useEnhancedFeatures) {
+        // Enhanced rendering features
+        bool isMetallic = (material.name.find("Gold") != std::string::npos ||
+                          material.name.find("Silver") != std::string::npos ||
+                          material.name.find("Copper") != std::string::npos ||
+                          material.name.find("Bronze") != std::string::npos);
+        
+        float metallicFactor = isMetallic ? 0.9f : 0.1f;
+        float roughnessFactor = isMetallic ? 0.1f : 0.8f;
+        float ambientOcclusion = 0.1f; // Subtle AO
+        
+        glUniform1i(glGetUniformLocation(program, "enableReflections"), 1);
+        glUniform1i(glGetUniformLocation(program, "enableSSAO"), 0); // Keep simple for now
+        glUniform1f(glGetUniformLocation(program, "ambientOcclusion"), ambientOcclusion);
+        glUniform1f(glGetUniformLocation(program, "metallicFactor"), metallicFactor);
+        glUniform1f(glGetUniformLocation(program, "roughnessFactor"), roughnessFactor);
+        glUniform1i(glGetUniformLocation(program, "hasEnvironmentMap"), 0); // No cubemap for now
+        
+        glUniform1i(glGetUniformLocation(program, "useMaterial"), 1); // Enable material mode
+    }
+}
+
 void GraphicsManager::renderForwardPlusPass(const glm::mat4& view, const glm::mat4& projection,
                                            const std::vector<RTSphere>& spheres,
                                            const std::vector<Cube>& cubes,
@@ -1093,11 +1221,11 @@ void GraphicsManager::renderFPS(float fps, float deltaTime) {
     
     glBindVertexArray(fpsVAO);
     
-    // Render a simple colored rectangle for FPS (simplified approach)
-    float bgX = screenWidth - 120.0f;
-    float bgY = screenHeight - 60.0f;
-    float bgWidth = 110.0f;
-    float bgHeight = 50.0f;
+    // Calculate FPS text position
+    float bgX = 10.0f;  // Top left instead of top right
+    float bgY = screenHeight - 50.0f;
+    float bgWidth = 150.0f;
+    float bgHeight = 40.0f;
     
     // Background quad (dark semi-transparent)
     glUniform3f(glGetUniformLocation(mainShaderProgram, "objectColor"), 0.0f, 0.0f, 0.0f);
@@ -1117,6 +1245,47 @@ void GraphicsManager::renderFPS(float fps, float deltaTime) {
     glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(bgVertices), bgVertices);
     glDrawArrays(GL_TRIANGLES, 0, 6);
     
+    // Render FPS text using simple colored quads for digits
+    // Convert FPS to integer and extract digits
+    int fpsInt = static_cast<int>(fps);
+    std::string fpsText = "FPS:" + std::to_string(fpsInt);
+    
+    // Render simple text representation using colored bars
+    float textX = bgX + 10.0f;
+    float textY = bgY + 10.0f;
+    float charWidth = 12.0f;
+    float charHeight = 20.0f;
+    float charSpacing = 2.0f;
+    
+    // Set text color (bright green for visibility)
+    glUniform3f(glGetUniformLocation(mainShaderProgram, "objectColor"), 0.0f, 1.0f, 0.0f);
+    
+    // Render simple digit bars - create a 7-segment style display for each digit
+    // For simplicity, we'll render bars that approximate the number
+    
+    // First render "FPS:" text using simple bars
+    float currentX = textX;
+    
+    // Render digits using a simple bar pattern
+    // We'll use a simplified approach: render vertical bars for each digit
+    std::string digits = std::to_string(fpsInt);
+    currentX += 35.0f; // Offset for "FPS:" label
+    
+    for (char digitChar : digits) {
+        int digit = digitChar - '0';
+        
+        // Create a simple pattern for each digit (using 7-segment inspired layout)
+        // This is a simplified version - we'll render bars based on digit value
+        
+        // Render bars for this digit
+        renderDigit(digit, currentX, textY, charWidth, charHeight);
+        currentX += charWidth + charSpacing;
+    }
+    
+    // Also render frame time
+    float frameTimeMs = deltaTime * 1000.0f;
+    float timeY = bgY + 5.0f;
+    
     // Restore OpenGL state
     glUseProgram(currentProgram);
     if (depthTestEnabled) glEnable(GL_DEPTH_TEST);
@@ -1131,135 +1300,223 @@ void GraphicsManager::renderFPS(float fps, float deltaTime) {
             renderMode = "Modern Vulkan (Forward+)";
         }
         std::cout << "FPS: " << static_cast<int>(fps) << " | Frame time: " 
-                  << std::fixed << std::setprecision(2) << (deltaTime * 1000.0f) << "ms | Renderer: " << renderMode << std::endl;
+                  << std::fixed << std::setprecision(2) << frameTimeMs << "ms | Renderer: " << renderMode << std::endl;
         printTimer = 0.0f;
     }
 }
 
-void GraphicsManager::setMaterialUniforms(GLuint program, const Material& material, bool useEnhancedFeatures) {
-    // Set material properties
-    glUniform3f(glGetUniformLocation(program, "material.ambient"), material.ambient.x, material.ambient.y, material.ambient.z);
-    glUniform3f(glGetUniformLocation(program, "material.diffuse"), material.diffuse.x, material.diffuse.y, material.diffuse.z);
-    glUniform3f(glGetUniformLocation(program, "material.specular"), material.specular.x, material.specular.y, material.specular.z);
-    glUniform1f(glGetUniformLocation(program, "material.shininess"), material.shininess);
+// Helper function to render a single digit using simple bar patterns
+void GraphicsManager::renderDigit(int digit, float x, float y, float width, float height) {
+    // Simple 7-segment display pattern
+    // Segments: top, top-right, bottom-right, bottom, bottom-left, top-left, middle
     
-    if (useEnhancedFeatures) {
-        // Enhanced rendering features
-        bool isMetallic = (material.name.find("Gold") != std::string::npos ||
-                          material.name.find("Silver") != std::string::npos ||
-                          material.name.find("Copper") != std::string::npos ||
-                          material.name.find("Bronze") != std::string::npos);
+    float segmentThickness = 3.0f;
+    float segmentWidth = width - 2.0f;
+    float segmentHeight = (height - 4.0f) / 2.0f;
+    
+    // Define which segments are on for each digit (top, topR, bottomR, bottom, bottomL, topL, middle)
+    bool segments[10][7] = {
+        {1,1,1,1,1,1,0}, // 0
+        {0,1,1,0,0,0,0}, // 1
+        {1,1,0,1,1,0,1}, // 2
+        {1,1,1,1,0,0,1}, // 3
+        {0,1,1,0,0,1,1}, // 4
+        {1,0,1,1,0,1,1}, // 5
+        {1,0,1,1,1,1,1}, // 6
+        {1,1,1,0,0,0,0}, // 7
+        {1,1,1,1,1,1,1}, // 8
+        {1,1,1,1,0,1,1}  // 9
+    };
+    
+    if (digit < 0 || digit > 9) return;
+    
+    // Render each segment
+    float vertices[48]; // 6 vertices * 8 components for each segment
+    
+    // Top segment
+    if (segments[digit][0]) {
+        float topY = y + height - segmentThickness;
+        vertices[0] = x; vertices[1] = topY; vertices[2] = 0.0f; 
+        vertices[3] = 0.0f; vertices[4] = 0.0f; vertices[5] = 1.0f; vertices[6] = 0.0f; vertices[7] = 0.0f;
         
-        float metallicFactor = isMetallic ? 0.9f : 0.1f;
-        float roughnessFactor = isMetallic ? 0.1f : 0.8f;
-        float ambientOcclusion = 0.1f; // Subtle AO
+        vertices[8] = x + segmentWidth; vertices[9] = topY; vertices[10] = 0.0f;
+        vertices[11] = 0.0f; vertices[12] = 0.0f; vertices[13] = 1.0f; vertices[14] = 1.0f; vertices[15] = 0.0f;
         
-        glUniform1i(glGetUniformLocation(program, "enableReflections"), 1);
-        glUniform1i(glGetUniformLocation(program, "enableSSAO"), 0); // Keep simple for now
-        glUniform1f(glGetUniformLocation(program, "ambientOcclusion"), ambientOcclusion);
-        glUniform1f(glGetUniformLocation(program, "metallicFactor"), metallicFactor);
-        glUniform1f(glGetUniformLocation(program, "roughnessFactor"), roughnessFactor);
-        glUniform1i(glGetUniformLocation(program, "hasEnvironmentMap"), 0); // No cubemap for now
+        vertices[16] = x; vertices[17] = y + height; vertices[18] = 0.0f;
+        vertices[19] = 0.0f; vertices[20] = 0.0f; vertices[21] = 1.0f; vertices[22] = 0.0f; vertices[23] = 1.0f;
         
-        glUniform1i(glGetUniformLocation(program, "useMaterial"), 1); // Enable material mode
-    }
-}
-
-void GraphicsManager::renderForwardPass(const glm::mat4& view, const glm::mat4& projection, 
-                                        const std::vector<RTSphere>& spheres,
-                                        const std::vector<Cube>& cubes,
-                                        const std::vector<Bullet>& bullets,
-                                        const glm::vec3& mainObjectPos,
-                                        const Material& currentMaterial) {
-    // Forward rendering: render objects front-to-back for early Z rejection
-    
-    // 1. Render opaque objects first (front to back for performance)
-    renderOpaqueObjects(view, projection, spheres, cubes, bullets, mainObjectPos, currentMaterial);
-    
-    // 2. Render transparent objects last (back to front for correct blending)
-    renderTransparentObjects(view, projection, spheres, cubes, bullets);
-}
-
-void GraphicsManager::renderOpaqueObjects(const glm::mat4& view, const glm::mat4& projection,
-                                         const std::vector<RTSphere>& spheres,
-                                         const std::vector<Cube>& cubes,
-                                         const std::vector<Bullet>& bullets,
-                                         const glm::vec3& mainObjectPos,
-                                         const Material& currentMaterial) {
-    // Disable blending for opaque objects
-    glDisable(GL_BLEND);
-    
-    // Set global render state once for all objects
-    setGlobalRenderState(view, projection);
-    
-    // Render floor first (usually largest/farthest object)
-    glm::mat4 floorModel = glm::mat4(1.0f);
-    floorModel = glm::translate(floorModel, glm::vec3(0.0f, -0.5f, 0.0f));
-    floorModel = glm::scale(floorModel, glm::vec3(20.0f, 0.1f, 20.0f));
-    renderFloor(floorModel, view, projection);
-    
-    // Render main sphere
-    glm::mat4 mainModel = glm::mat4(1.0f);
-    mainModel = glm::translate(mainModel, mainObjectPos);
-    renderSphere(mainModel, view, projection, currentMaterial, true);
-    
-    // Render spawned cubes (opaque)
-    for (const auto& cube : cubes) {
-        if (cube.isActive) {
-            glm::mat4 model = glm::mat4(1.0f);
-            model = glm::translate(model, cube.position);
-            renderSpawned(model, view, projection);
-        }
+        vertices[24] = x + segmentWidth; vertices[25] = topY; vertices[26] = 0.0f;
+        vertices[27] = 0.0f; vertices[28] = 0.0f; vertices[29] = 1.0f; vertices[30] = 1.0f; vertices[31] = 0.0f;
+        
+        vertices[32] = x + segmentWidth; vertices[33] = y + height; vertices[34] = 0.0f;
+        vertices[35] = 0.0f; vertices[36] = 0.0f; vertices[37] = 1.0f; vertices[38] = 1.0f; vertices[39] = 1.0f;
+        
+        vertices[40] = x; vertices[41] = y + height; vertices[42] = 0.0f;
+        vertices[43] = 0.0f; vertices[44] = 0.0f; vertices[45] = 1.0f; vertices[46] = 0.0f; vertices[47] = 1.0f;
+        
+        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vertices), vertices);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
     }
     
-    // Render bullets (small objects, render last among opaques)
-    for (const auto& bullet : bullets) {
-        if (bullet.active) {
-            glm::mat4 model = glm::mat4(1.0f);
-            model = glm::translate(model, bullet.position);
-            model = glm::scale(model, glm::vec3(0.05f));
-            renderBullet(model, view, projection);
-        }
+    // Top-right segment
+    if (segments[digit][1]) {
+        float segX = x + segmentWidth - segmentThickness;
+        float segYTop = y + height / 2.0f + 1.0f;
+        float segYBottom = y + height;
+        
+        vertices[0] = segX; vertices[1] = segYTop; vertices[2] = 0.0f;
+        vertices[3] = 0.0f; vertices[4] = 0.0f; vertices[5] = 1.0f; vertices[6] = 0.0f; vertices[7] = 0.0f;
+        
+        vertices[8] = x + segmentWidth; vertices[9] = segYTop; vertices[10] = 0.0f;
+        vertices[11] = 0.0f; vertices[12] = 0.0f; vertices[13] = 1.0f; vertices[14] = 1.0f; vertices[15] = 0.0f;
+        
+        vertices[16] = segX; vertices[17] = segYBottom; vertices[18] = 0.0f;
+        vertices[19] = 0.0f; vertices[20] = 0.0f; vertices[21] = 1.0f; vertices[22] = 0.0f; vertices[23] = 1.0f;
+        
+        vertices[24] = x + segmentWidth; vertices[25] = segYTop; vertices[26] = 0.0f;
+        vertices[27] = 0.0f; vertices[28] = 0.0f; vertices[29] = 1.0f; vertices[30] = 1.0f; vertices[31] = 0.0f;
+        
+        vertices[32] = x + segmentWidth; vertices[33] = segYBottom; vertices[34] = 0.0f;
+        vertices[35] = 0.0f; vertices[36] = 0.0f; vertices[37] = 1.0f; vertices[38] = 1.0f; vertices[39] = 1.0f;
+        
+        vertices[40] = segX; vertices[41] = segYBottom; vertices[42] = 0.0f;
+        vertices[43] = 0.0f; vertices[44] = 0.0f; vertices[45] = 1.0f; vertices[46] = 0.0f; vertices[47] = 1.0f;
+        
+        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vertices), vertices);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
     }
-}
-
-void GraphicsManager::renderTransparentObjects(const glm::mat4& view, const glm::mat4& projection,
-                                              const std::vector<RTSphere>& spheres,
-                                              const std::vector<Cube>& cubes,
-                                              const std::vector<Bullet>& bullets) {
-    // Enable blending for transparent objects
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     
-    // Disable depth writing for transparent objects (but keep depth testing)
-    glDepthMask(GL_FALSE);
+    // Bottom-right segment
+    if (segments[digit][2]) {
+        float segX = x + segmentWidth - segmentThickness;
+        float segYTop = y;
+        float segYBottom = y + height / 2.0f - 1.0f;
+        
+        vertices[0] = segX; vertices[1] = segYTop; vertices[2] = 0.0f;
+        vertices[3] = 0.0f; vertices[4] = 0.0f; vertices[5] = 1.0f; vertices[6] = 0.0f; vertices[7] = 0.0f;
+        
+        vertices[8] = x + segmentWidth; vertices[9] = segYTop; vertices[10] = 0.0f;
+        vertices[11] = 0.0f; vertices[12] = 0.0f; vertices[13] = 1.0f; vertices[14] = 1.0f; vertices[15] = 0.0f;
+        
+        vertices[16] = segX; vertices[17] = segYBottom; vertices[18] = 0.0f;
+        vertices[19] = 0.0f; vertices[20] = 0.0f; vertices[21] = 1.0f; vertices[22] = 0.0f; vertices[23] = 1.0f;
+        
+        vertices[24] = x + segmentWidth; vertices[25] = segYTop; vertices[26] = 0.0f;
+        vertices[27] = 0.0f; vertices[28] = 0.0f; vertices[29] = 1.0f; vertices[30] = 1.0f; vertices[31] = 0.0f;
+        
+        vertices[32] = x + segmentWidth; vertices[33] = segYBottom; vertices[34] = 0.0f;
+        vertices[35] = 0.0f; vertices[36] = 0.0f; vertices[37] = 1.0f; vertices[38] = 1.0f; vertices[39] = 1.0f;
+        
+        vertices[40] = segX; vertices[41] = segYBottom; vertices[42] = 0.0f;
+        vertices[43] = 0.0f; vertices[44] = 0.0f; vertices[45] = 1.0f; vertices[46] = 0.0f; vertices[47] = 1.0f;
+        
+        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vertices), vertices);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+    }
     
-    // TODO: Sort transparent objects back-to front and render
-    // For now, no transparent objects in this scene
+    // Bottom segment
+    if (segments[digit][3]) {
+        float topY = y;
+        vertices[0] = x; vertices[1] = topY; vertices[2] = 0.0f;
+        vertices[3] = 0.0f; vertices[4] = 0.0f; vertices[5] = 1.0f; vertices[6] = 0.0f; vertices[7] = 0.0f;
+        
+        vertices[8] = x + segmentWidth; vertices[9] = topY; vertices[10] = 0.0f;
+        vertices[11] = 0.0f; vertices[12] = 0.0f; vertices[13] = 1.0f; vertices[14] = 1.0f; vertices[15] = 0.0f;
+        
+        vertices[16] = x; vertices[17] = topY + segmentThickness; vertices[18] = 0.0f;
+        vertices[19] = 0.0f; vertices[20] = 0.0f; vertices[21] = 1.0f; vertices[22] = 0.0f; vertices[23] = 1.0f;
+        
+        vertices[24] = x + segmentWidth; vertices[25] = topY; vertices[26] = 0.0f;
+        vertices[27] = 0.0f; vertices[28] = 0.0f; vertices[29] = 1.0f; vertices[30] = 1.0f; vertices[31] = 0.0f;
+        
+        vertices[32] = x + segmentWidth; vertices[33] = topY + segmentThickness; vertices[34] = 0.0f;
+        vertices[35] = 0.0f; vertices[36] = 0.0f; vertices[37] = 1.0f; vertices[38] = 1.0f; vertices[39] = 1.0f;
+        
+        vertices[40] = x; vertices[41] = topY + segmentThickness; vertices[42] = 0.0f;
+        vertices[43] = 0.0f; vertices[44] = 0.0f; vertices[45] = 1.0f; vertices[46] = 0.0f; vertices[47] = 1.0f;
+        
+        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vertices), vertices);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+    }
     
-    // Re-enable depth writing
-    glDepthMask(GL_TRUE);
-}
-
-void GraphicsManager::setGlobalRenderState(const glm::mat4& view, const glm::mat4& projection) {
-    // Set shared uniforms that don't change per object in forward rendering
+    // Bottom-left segment
+    if (segments[digit][4]) {
+        float segX = x;
+        float segYTop = y;
+        float segYBottom = y + height / 2.0f - 1.0f;
+        
+        vertices[0] = segX; vertices[1] = segYTop; vertices[2] = 0.0f;
+        vertices[3] = 0.0f; vertices[4] = 0.0f; vertices[5] = 1.0f; vertices[6] = 0.0f; vertices[7] = 0.0f;
+        
+        vertices[8] = segX + segmentThickness; vertices[9] = segYTop; vertices[10] = 0.0f;
+        vertices[11] = 0.0f; vertices[12] = 0.0f; vertices[13] = 1.0f; vertices[14] = 1.0f; vertices[15] = 0.0f;
+        
+        vertices[16] = segX; vertices[17] = segYBottom; vertices[18] = 0.0f;
+        vertices[19] = 0.0f; vertices[20] = 0.0f; vertices[21] = 1.0f; vertices[22] = 0.0f; vertices[23] = 1.0f;
+        
+        vertices[24] = segX + segmentThickness; vertices[25] = segYTop; vertices[26] = 0.0f;
+        vertices[27] = 0.0f; vertices[28] = 0.0f; vertices[29] = 1.0f; vertices[30] = 1.0f; vertices[31] = 0.0f;
+        
+        vertices[32] = segX + segmentThickness; vertices[33] = segYBottom; vertices[34] = 0.0f;
+        vertices[35] = 0.0f; vertices[36] = 0.0f; vertices[37] = 1.0f; vertices[38] = 1.0f; vertices[39] = 1.0f;
+        
+        vertices[40] = segX; vertices[41] = segYBottom; vertices[42] = 0.0f;
+        vertices[43] = 0.0f; vertices[44] = 0.0f; vertices[45] = 1.0f; vertices[46] = 0.0f; vertices[47] = 1.0f;
+        
+        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vertices), vertices);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+    }
     
-    // Update view position for all shaders (for specular calculations)
-    glm::vec3 viewPos = glm::vec3(glm::inverse(view)[3]);
+    // Top-left segment
+    if (segments[digit][5]) {
+        float segX = x;
+        float segYTop = y + height / 2.0f + 1.0f;
+        float segYBottom = y + height;
+        
+        vertices[0] = segX; vertices[1] = segYTop; vertices[2] = 0.0f;
+        vertices[3] = 0.0f; vertices[4] = 0.0f; vertices[5] = 1.0f; vertices[6] = 0.0f; vertices[7] = 0.0f;
+        
+        vertices[8] = segX + segmentThickness; vertices[9] = segYTop; vertices[10] = 0.0f;
+        vertices[11] = 0.0f; vertices[12] = 0.0f; vertices[13] = 1.0f; vertices[14] = 1.0f; vertices[15] = 0.0f;
+        
+        vertices[16] = segX; vertices[17] = segYBottom; vertices[18] = 0.0f;
+        vertices[19] = 0.0f; vertices[20] = 0.0f; vertices[21] = 1.0f; vertices[22] = 0.0f; vertices[23] = 1.0f;
+        
+        vertices[24] = segX + segmentThickness; vertices[25] = segYTop; vertices[26] = 0.0f;
+        vertices[27] = 0.0f; vertices[28] = 0.0f; vertices[29] = 1.0f; vertices[30] = 1.0f; vertices[31] = 0.0f;
+        
+        vertices[32] = segX + segmentThickness; vertices[33] = segYBottom; vertices[34] = 0.0f;
+        vertices[35] = 0.0f; vertices[36] = 0.0f; vertices[37] = 1.0f; vertices[38] = 1.0f; vertices[39] = 1.0f;
+        
+        vertices[40] = segX; vertices[41] = segYBottom; vertices[42] = 0.0f;
+        vertices[43] = 0.0f; vertices[44] = 0.0f; vertices[45] = 1.0f; vertices[46] = 0.0f; vertices[47] = 1.0f;
+        
+        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vertices), vertices);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+    }
     
-    // Set for main shader
-    glUseProgram(mainShaderProgram);
-    glUniformMatrix4fv(glGetUniformLocation(mainShaderProgram, "view"), 1, GL_FALSE, &view[0][0]);
-    glUniformMatrix4fv(glGetUniformLocation(mainShaderProgram, "projection"), 1, GL_FALSE, &projection[0][0]);
-    glUniform3f(glGetUniformLocation(mainShaderProgram, "viewPos"), viewPos.x, viewPos.y, viewPos.z);
-    glUniform3f(glGetUniformLocation(mainShaderProgram, "lightPos"), currentLightPos.x, currentLightPos.y, currentLightPos.z);
-    glUniform3f(glGetUniformLocation(mainShaderProgram, "lightColor"), currentLightColor.x, currentLightColor.y, currentLightColor.z);
-    
-    // Set for floor shader
-    glUseProgram(floorShaderProgram);
-    glUniformMatrix4fv(glGetUniformLocation(floorShaderProgram, "view"), 1, GL_FALSE, &view[0][0]);
-    glUniformMatrix4fv(glGetUniformLocation(floorShaderProgram, "projection"), 1, GL_FALSE, &projection[0][0]);
-    glUniform3f(glGetUniformLocation(floorShaderProgram, "viewPos"), viewPos.x, viewPos.y, viewPos.z);
-    glUniform3f(glGetUniformLocation(floorShaderProgram, "lightPos"), currentLightPos.x, currentLightPos.y, currentLightPos.z);
-    glUniform3f(glGetUniformLocation(floorShaderProgram, "lightColor"), currentLightColor.x, currentLightColor.y, currentLightColor.z);
+    // Middle segment
+    if (segments[digit][6]) {
+        float midY = y + height / 2.0f - segmentThickness / 2.0f;
+        vertices[0] = x; vertices[1] = midY; vertices[2] = 0.0f;
+        vertices[3] = 0.0f; vertices[4] = 0.0f; vertices[5] = 1.0f; vertices[6] = 0.0f; vertices[7] = 0.0f;
+        
+        vertices[8] = x + segmentWidth; vertices[9] = midY; vertices[10] = 0.0f;
+        vertices[11] = 0.0f; vertices[12] = 0.0f; vertices[13] = 1.0f; vertices[14] = 1.0f; vertices[15] = 0.0f;
+        
+        vertices[16] = x; vertices[17] = midY + segmentThickness; vertices[18] = 0.0f;
+        vertices[19] = 0.0f; vertices[20] = 0.0f; vertices[21] = 1.0f; vertices[22] = 0.0f; vertices[23] = 1.0f;
+        
+        vertices[24] = x + segmentWidth; vertices[25] = midY; vertices[26] = 0.0f;
+        vertices[27] = 0.0f; vertices[28] = 0.0f; vertices[29] = 1.0f; vertices[30] = 1.0f; vertices[31] = 0.0f;
+        
+        vertices[32] = x + segmentWidth; vertices[33] = midY + segmentThickness; vertices[34] = 0.0f;
+        vertices[35] = 0.0f; vertices[36] = 0.0f; vertices[37] = 1.0f; vertices[38] = 1.0f; vertices[39] = 1.0f;
+        
+        vertices[40] = x; vertices[41] = midY + segmentThickness; vertices[42] = 0.0f;
+        vertices[43] = 0.0f; vertices[44] = 0.0f; vertices[45] = 1.0f; vertices[46] = 0.0f; vertices[47] = 1.0f;
+        
+        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vertices), vertices);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+    }
 }

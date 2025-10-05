@@ -101,7 +101,8 @@ public:
     // FPS display
     void renderFPS(float fps, float deltaTime);
     void initFPSDisplay();
-    
+    void renderDigit(int digit, float x, float y, float width, float height);
+
     // Modern renderer integration
     bool useModernRenderer() const { return useVulkanRenderer; }
     void renderModern(const std::vector<RTSphere>& spheres, const glm::vec3& cameraPos, 
