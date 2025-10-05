@@ -137,7 +137,7 @@ private:
     
     // Cascade split distances
     std::array<float, NUM_CASCADES> cascadeSplits_{};
-    glm::vec3 lightDirection_ = glm::normalize(glm::vec3(-0.5f, -1.0f, -0.3f));
+    glm::vec3 lightDirection_ = glm::normalize(glm::vec3(-1.0f, -2.0f, -1.0f)); // Strong directional light
     
     // MSAA resources
     std::unique_ptr<VulkanImage> colorImage_;

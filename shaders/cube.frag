@@ -21,7 +21,7 @@ layout(set = 0, binding = 1) uniform ShadowUBO {
     float padding;
 } shadow;
 
-layout(set = 0, binding = 2) uniform sampler2DArray shadowMap; // Array of shadow maps for cascades
+layout(set = 0, binding = 2) uniform sampler2D shadowMaps[4]; // 4 individual shadow maps for cascades
 
 const float PI = 3.14159265359;
 
@@ -116,12 +116,12 @@ float calculateShadowPCF(vec4 fragPosLight, int cascadeIndex, float bias) {
     
     // PCF with 3x3 kernel
     float shadow = 0.0;
-    vec2 texelSize = 1.0 / textureSize(shadowMap, 0).xy;
+    vec2 texelSize = 1.0 / textureSize(shadowMaps[cascadeIndex], 0).xy;
     
     for(int x = -1; x <= 1; ++x) {
         for(int y = -1; y <= 1; ++y) {
             vec2 offset = vec2(x, y) * texelSize;
-            float pcfDepth = texture(shadowMap, vec3(projCoords.xy + offset, float(cascadeIndex))).r;
+            float pcfDepth = texture(shadowMaps[cascadeIndex], projCoords.xy + offset).r;
             shadow += (currentDepth - bias) > pcfDepth ? 0.0 : 1.0;
         }
     }
@@ -162,8 +162,8 @@ void main() {
         vec3 L = normalize(-shadow.lightDirection);
         vec3 H = normalize(V + L);
         
-        // No attenuation for directional light
-        vec3 radiance = vec3(5.0); // Sun intensity
+        // Strong sun intensity for visible shadows
+        vec3 radiance = vec3(15.0); // Increased sun intensity
         
         // Cook-Torrance BRDF
         float NDF = DistributionGGX(N, H, roughness);
@@ -236,8 +236,8 @@ void main() {
         Lo += (diffuse + specular) * radiance * NdotL;
     }
     
-    // Ambient lighting (IBL approximation)
-    vec3 ambient = vec3(0.03) * albedo;
+    // Ambient lighting (reduced for dramatic shadows)
+    vec3 ambient = vec3(0.01) * albedo; // Very dark ambient
     vec3 color = ambient + Lo;
     
     // HDR tonemapping (Reinhard)
