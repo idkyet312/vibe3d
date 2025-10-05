@@ -6,10 +6,10 @@ layout(location = 2) in vec2 inTexCoord;
 layout(location = 3) in vec3 inColor;
 
 layout(push_constant) uniform PushConstants {
-    mat4 lightSpaceMatrix;
     mat4 model;
+    mat4 lightSpace;
 } pushConstants;
 
 void main() {
-    gl_Position = pushConstants.lightSpaceMatrix * pushConstants.model * vec4(inPosition, 1.0);
+    gl_Position = pushConstants.lightSpace * pushConstants.model * vec4(inPosition, 1.0);
 }

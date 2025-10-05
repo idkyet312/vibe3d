@@ -132,6 +132,8 @@ private:
     VkSampler shadowSampler_ = VK_NULL_HANDLE;
     VkRenderPass shadowRenderPass_ = VK_NULL_HANDLE;
     std::array<std::vector<VkFramebuffer>, NUM_CASCADES> shadowFramebuffers_;
+    VkPipelineLayout shadowPipelineLayout_ = VK_NULL_HANDLE;
+    VkPipeline shadowPipeline_ = VK_NULL_HANDLE;
     
     // Cascade split distances
     std::array<float, NUM_CASCADES> cascadeSplits_{};

@@ -67,6 +67,11 @@ bool ForwardPlusRenderer::initialize(GLFWwindow* window) {
         return false;
     }
     
+    if (!createShadowPipeline()) {
+        std::cerr << "Failed to create shadow pipeline" << std::endl;
+        return false;
+    }
+    
     if (!createRenderPass()) {
         std::cerr << "Failed to create render pass" << std::endl;
         return false;
@@ -137,6 +142,14 @@ void ForwardPlusRenderer::cleanup() {
         
         if (shadowRenderPass_ != VK_NULL_HANDLE) {
             vkDestroyRenderPass(device_->getDevice(), shadowRenderPass_, nullptr);
+        }
+        
+        if (shadowPipeline_ != VK_NULL_HANDLE) {
+            vkDestroyPipeline(device_->getDevice(), shadowPipeline_, nullptr);
+        }
+        
+        if (shadowPipelineLayout_ != VK_NULL_HANDLE) {
+            vkDestroyPipelineLayout(device_->getDevice(), shadowPipelineLayout_, nullptr);
         }
         
         // Clean up depth resources
@@ -604,6 +617,161 @@ bool ForwardPlusRenderer::createPipeline() {
     vkDestroyShaderModule(device_->getDevice(), vertShaderModule, nullptr);
     
     return true;
+}
+
+bool ForwardPlusRenderer::createShadowPipeline() {
+    // Load shadow shaders
+    auto vertShaderCode = readShaderFile("shaders/shadow_cascade.vert.spv");
+    auto fragShaderCode = readShaderFile("shaders/shadow_cascade.frag.spv");
+    
+    if (vertShaderCode.empty() || fragShaderCode.empty()) {
+        std::cerr << "Failed to load shadow shaders" << std::endl;
+        return false;
+    }
+    
+    VkShaderModule vertShaderModule = createShaderModule(vertShaderCode);
+    VkShaderModule fragShaderModule = createShaderModule(fragShaderCode);
+    
+    VkPipelineShaderStageCreateInfo vertShaderStageInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+        .stage = VK_SHADER_STAGE_VERTEX_BIT,
+        .module = vertShaderModule,
+        .pName = "main"
+    };
+    
+    VkPipelineShaderStageCreateInfo fragShaderStageInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+        .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
+        .module = fragShaderModule,
+        .pName = "main"
+    };
+    
+    VkPipelineShaderStageCreateInfo shaderStages[] = {vertShaderStageInfo, fragShaderStageInfo};
+    
+    // Vertex input - same as main pipeline
+    auto bindingDescription = Vertex::getBindingDescription();
+    auto attributeDescriptions = Vertex::getAttributeDescriptions();
+    
+    VkPipelineVertexInputStateCreateInfo vertexInputInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+        .vertexBindingDescriptionCount = 1,
+        .pVertexBindingDescriptions = &bindingDescription,
+        .vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size()),
+        .pVertexAttributeDescriptions = attributeDescriptions.data()
+    };
+    
+    VkPipelineInputAssemblyStateCreateInfo inputAssembly{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+        .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+        .primitiveRestartEnable = VK_FALSE
+    };
+    
+    VkViewport viewport{
+        .x = 0.0f,
+        .y = 0.0f,
+        .width = static_cast<float>(SHADOW_MAP_SIZE),
+        .height = static_cast<float>(SHADOW_MAP_SIZE),
+        .minDepth = 0.0f,
+        .maxDepth = 1.0f
+    };
+    
+    VkRect2D scissor{
+        .offset = {0, 0},
+        .extent = {SHADOW_MAP_SIZE, SHADOW_MAP_SIZE}
+    };
+    
+    VkPipelineViewportStateCreateInfo viewportState{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+        .viewportCount = 1,
+        .pViewports = &viewport,
+        .scissorCount = 1,
+        .pScissors = &scissor
+    };
+    
+    VkPipelineRasterizationStateCreateInfo rasterizer{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+        .depthClampEnable = VK_FALSE,
+        .rasterizerDiscardEnable = VK_FALSE,
+        .polygonMode = VK_POLYGON_MODE_FILL,
+        .cullMode = VK_CULL_MODE_BACK_BIT,
+        .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
+        .depthBiasEnable = VK_TRUE,  // Enable depth bias for shadow maps
+        .depthBiasConstantFactor = 1.25f,
+        .depthBiasClamp = 0.0f,
+        .depthBiasSlopeFactor = 1.75f,
+        .lineWidth = 1.0f
+    };
+    
+    VkPipelineMultisampleStateCreateInfo multisampling{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+        .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
+        .sampleShadingEnable = VK_FALSE
+    };
+    
+    VkPipelineDepthStencilStateCreateInfo depthStencil{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+        .depthTestEnable = VK_TRUE,
+        .depthWriteEnable = VK_TRUE,
+        .depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL,
+        .depthBoundsTestEnable = VK_FALSE,
+        .stencilTestEnable = VK_FALSE,
+        .minDepthBounds = 0.0f,
+        .maxDepthBounds = 1.0f
+    };
+    
+    // No color attachments for shadow pass
+    VkPipelineColorBlendStateCreateInfo colorBlending{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+        .logicOpEnable = VK_FALSE,
+        .attachmentCount = 0,
+        .pAttachments = nullptr
+    };
+    
+    // Push constants for model and light space matrices
+    VkPushConstantRange pushConstantRange{
+        .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+        .offset = 0,
+        .size = sizeof(glm::mat4) * 2  // model + lightSpaceMatrix
+    };
+    
+    VkPipelineLayoutCreateInfo pipelineLayoutInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .setLayoutCount = 0,
+        .pSetLayouts = nullptr,
+        .pushConstantRangeCount = 1,
+        .pPushConstantRanges = &pushConstantRange
+    };
+    
+    if (vkCreatePipelineLayout(device_->getDevice(), &pipelineLayoutInfo, nullptr, 
+                              &shadowPipelineLayout_) != VK_SUCCESS) {
+        vkDestroyShaderModule(device_->getDevice(), fragShaderModule, nullptr);
+        vkDestroyShaderModule(device_->getDevice(), vertShaderModule, nullptr);
+        return false;
+    }
+    
+    VkGraphicsPipelineCreateInfo pipelineInfo{
+        .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+        .stageCount = 2,
+        .pStages = shaderStages,
+        .pVertexInputState = &vertexInputInfo,
+        .pInputAssemblyState = &inputAssembly,
+        .pViewportState = &viewportState,
+        .pRasterizationState = &rasterizer,
+        .pMultisampleState = &multisampling,
+        .pDepthStencilState = &depthStencil,
+        .pColorBlendState = &colorBlending,
+        .layout = shadowPipelineLayout_,
+        .renderPass = shadowRenderPass_,
+        .subpass = 0
+    };
+    
+    bool success = vkCreateGraphicsPipelines(device_->getDevice(), VK_NULL_HANDLE, 1, &pipelineInfo, 
+                                            nullptr, &shadowPipeline_) == VK_SUCCESS;
+    
+    vkDestroyShaderModule(device_->getDevice(), fragShaderModule, nullptr);
+    vkDestroyShaderModule(device_->getDevice(), vertShaderModule, nullptr);
+    
+    return success;
 }
 
 std::vector<char> ForwardPlusRenderer::readShaderFile(const std::string& filename) {
@@ -1142,8 +1310,7 @@ void ForwardPlusRenderer::updateShadowUBO() {
 }
 
 void ForwardPlusRenderer::renderShadowCascades(VkCommandBuffer cmd) {
-    // This will be called before the main render pass
-    // For now, we'll skip actual shadow rendering and just clear the maps
+    // Render scene geometry from light's perspective for each cascade
     for (size_t i = 0; i < NUM_CASCADES; ++i) {
         VkClearValue clearValue{};
         clearValue.depthStencil = {1.0f, 0};
@@ -1162,8 +1329,51 @@ void ForwardPlusRenderer::renderShadowCascades(VkCommandBuffer cmd) {
         
         vkCmdBeginRenderPass(cmd, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
         
-        // TODO: Render scene geometry from light's perspective
-        // For now, just end the render pass
+        // Bind shadow pipeline
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadowPipeline_);
+        
+        // Bind vertex and index buffers
+        VkBuffer vertexBuffers[] = {vertexBuffer_->getBuffer()};
+        VkDeviceSize offsets[] = {0};
+        vkCmdBindVertexBuffers(cmd, 0, 1, vertexBuffers, offsets);
+        vkCmdBindIndexBuffer(cmd, indexBuffer_->getBuffer(), 0, VK_INDEX_TYPE_UINT32);
+        
+        // Get light space matrix for this cascade
+        float lastSplit = (i == 0) ? 0.1f : cascadeSplits_[i - 1];
+        glm::mat4 lightSpaceMatrix = calculateLightSpaceMatrix(lastSplit, cascadeSplits_[i]);
+        
+        float time = static_cast<float>(glfwGetTime());
+        
+        // Render rotating cube
+        glm::mat4 cubeModel = glm::mat4(1.0f);
+        cubeModel = glm::translate(cubeModel, glm::vec3(0.0f, 0.5f, 0.0f));
+        cubeModel = glm::rotate(cubeModel, time * glm::radians(30.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+        cubeModel = glm::rotate(cubeModel, time * glm::radians(20.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+        
+        // Push model and light space matrices
+        struct {
+            glm::mat4 model;
+            glm::mat4 lightSpace;
+        } pushConstants;
+        
+        pushConstants.model = cubeModel;
+        pushConstants.lightSpace = lightSpaceMatrix;
+        
+        vkCmdPushConstants(cmd, shadowPipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT, 
+                          0, sizeof(pushConstants), &pushConstants);
+        
+        // Draw cube (36 indices for 6 faces)
+        vkCmdDrawIndexed(cmd, 36, 1, 0, 0, 0);
+        
+        // Render floor
+        glm::mat4 floorModel = glm::mat4(1.0f);
+        pushConstants.model = floorModel;
+        
+        vkCmdPushConstants(cmd, shadowPipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT, 
+                          0, sizeof(pushConstants), &pushConstants);
+        
+        // Draw floor (6 indices starting at index 36)
+        vkCmdDrawIndexed(cmd, 6, 1, 36, 0, 0);
         
         vkCmdEndRenderPass(cmd);
     }
