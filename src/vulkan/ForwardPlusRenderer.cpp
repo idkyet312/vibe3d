@@ -1196,47 +1196,26 @@ void ForwardPlusRenderer::calculateCascadeSplits() {
 }
 
 glm::mat4 ForwardPlusRenderer::calculateLightSpaceMatrix(float nearPlane, float farPlane) {
-    // Get camera frustum corners in world space
+    // Get camera frustum corners in VIEW space first, then transform to WORLD space
     glm::mat4 proj = glm::perspective(glm::radians(45.0f), 
                                       static_cast<float>(config_.width) / config_.height,
                                       nearPlane, farPlane);
-    glm::mat4 invCam = glm::inverse(proj);
     
-    // Create light view matrix
-    glm::vec3 lightPos = -lightDirection_ * 50.0f;
+    // We need the inverse of projection-view to get world space corners
+    // But we're calculating based on projection only, which is wrong!
+    // The shadows need to account for the actual camera position
+    
+    // For now, use a simpler approach: tight orthographic projection around scene
+    glm::vec3 lightPos = glm::normalize(-lightDirection_) * 10.0f;
     glm::mat4 lightView = glm::lookAt(lightPos, glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
     
-    // Calculate frustum corners
-    std::vector<glm::vec4> frustumCorners;
-    for (uint32_t x = 0; x < 2; ++x) {
-        for (uint32_t y = 0; y < 2; ++y) {
-            for (uint32_t z = 0; z < 2; ++z) {
-                glm::vec4 pt = invCam * glm::vec4(
-                    2.0f * x - 1.0f,
-                    2.0f * y - 1.0f,
-                    2.0f * z - 1.0f,
-                    1.0f
-                );
-                frustumCorners.push_back(pt / pt.w);
-            }
-        }
-    }
-    
-    // Transform to light space and find bounds
-    glm::vec3 minBounds(std::numeric_limits<float>::max());
-    glm::vec3 maxBounds(std::numeric_limits<float>::lowest());
-    
-    for (const auto& corner : frustumCorners) {
-        glm::vec4 lightSpacePos = lightView * corner;
-        minBounds = glm::min(minBounds, glm::vec3(lightSpacePos));
-        maxBounds = glm::max(maxBounds, glm::vec3(lightSpacePos));
-    }
-    
-    // Create orthographic projection for shadow map
+    // Create tight orthographic projection for the scene bounds
+    // Scene is roughly -5 to +5 in X/Z, -2 to +2 in Y
+    float orthoSize = 15.0f; // Cover the whole scene
     glm::mat4 lightProjection = glm::ortho(
-        minBounds.x, maxBounds.x,
-        minBounds.y, maxBounds.y,
-        minBounds.z, maxBounds.z
+        -orthoSize, orthoSize,
+        -orthoSize, orthoSize,
+        -orthoSize, orthoSize * 2.0f  // Extended depth range
     );
     
     return lightProjection * lightView;

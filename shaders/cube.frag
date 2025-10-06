@@ -130,8 +130,8 @@ float calculateShadowPCF(vec4 fragPosLight, int cascadeIndex, float bias) {
 float calculateCascadedShadow(vec3 N, vec3 L) {
     int cascadeIndex = selectCascadeIndex();
     
-    // Reduced bias for better shadow visibility
-    float bias = max(0.002 * (1.0 - dot(N, L)), 0.0005);
+    // Very small bias for maximum shadow visibility
+    float bias = max(0.0005 * (1.0 - dot(N, L)), 0.0001);
     
     return calculateShadowPCF(fragPosLightSpace[cascadeIndex], cascadeIndex, bias);
 }
@@ -150,8 +150,8 @@ void main() {
     vec3 L = normalize(-shadow.lightDirection);
     vec3 H = normalize(V + L);
     
-    // Bright directional light
-    vec3 radiance = vec3(4.0);
+    // VERY bright directional light for maximum contrast
+    vec3 radiance = vec3(8.0);
     
     float NDF = DistributionGGX(N, H, roughness);
     float G = GeometrySmith(N, V, L, roughness);
@@ -187,15 +187,19 @@ void main() {
         else if (cascadeIndex == 1) cascadeColor = vec3(0.0, 1.0, 0.0); // Green
         else if (cascadeIndex == 2) cascadeColor = vec3(0.0, 0.0, 1.0); // Blue
         else cascadeColor = vec3(1.0, 1.0, 0.0);                        // Yellow
-        outColor = vec4(cascadeColor * 0.5 + albedo * 0.5, 1.0);
+        
+        // Mix cascade color with albedo and shadow factor
+        vec3 mixColor = cascadeColor * 0.5 + albedo * 0.5;
+        mixColor *= (shadowFactor * 0.7 + 0.3); // Show shadows in cascade mode too
+        outColor = vec4(mixColor, 1.0);
         return;
     }
     
-    // Normal rendering with shadows
+    // Normal rendering with STRONG shadow contrast
     Lo += (diffuse + specular) * radiance * NdotL * shadowFactor;
     
-    // Very low ambient for maximum shadow contrast
-    vec3 ambient = vec3(0.005) * albedo;
+    // Almost NO ambient for maximum shadow visibility
+    vec3 ambient = vec3(0.001) * albedo;
     vec3 color = ambient + Lo;
     
     // HDR tonemapping
