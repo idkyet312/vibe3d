@@ -173,8 +173,18 @@ void main() {
         metallic = 0.0;                 // Non-metallic
         ambientStrength = material.ambientStrength;  // Use GUI-controlled ambient
         lightIntensity = material.lightIntensity;  // Use GUI-controlled light intensity
-        emissive = vec3(0.0);           // No emission
-        emissiveStrength = 0.0;
+        
+        // Very small, tight glow right around the cube base
+        // Assume cube is at approximately (0, 1.5, 0) in world space
+        vec3 cubePos = vec3(0.0, 1.5, 0.0);
+        float distance = length(fragPos - cubePos);
+        
+        // Extremely tight falloff - only visible within ~1 meter
+        float falloff = 1.0 / (1.0 + distance * distance * 8.0);
+        
+        // Very subtle glow, only visible immediately around the cube
+        emissive = material.emissive;
+        emissiveStrength = material.emissiveStrength * falloff * 0.1;
     }
     
     vec3 N = normalize(fragNormal);
@@ -245,8 +255,11 @@ void main() {
     
     vec3 color = ambient + Lo + emissiveColor;
     
-    // HDR tonemapping
-    color = color / (color + vec3(1.0));
+    // Improved HDR tonemapping (ACES approximation for better handling of bright emissives)
+    vec3 a = color * 2.51;
+    vec3 b = color * 0.03 + 0.59;
+    vec3 c = color * 2.43 + 0.14;
+    color = clamp((a) / (b + c), 0.0, 1.0);
     
     // Gamma correction
     color = pow(color, vec3(1.0/2.2));

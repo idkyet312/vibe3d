@@ -148,7 +148,7 @@ void ImGuiManager::renderMaterialPanel() {
     ImGui::Separator();
     ImGui::Text("Emissive (Glow)");
     changed |= ImGui::ColorEdit3("Emissive Color", &controls_.emissiveR, ImGuiColorEditFlags_Float);
-    changed |= ImGui::SliderFloat("Emissive Strength", &controls_.emissiveStrength, 0.0f, 10.0f);
+    changed |= ImGui::SliderFloat("Emissive Strength", &controls_.emissiveStrength, 0.0f, 100.0f);
     
     // Emissive color preview
     if (controls_.emissiveStrength > 0.0f) {
