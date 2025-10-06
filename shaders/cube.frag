@@ -172,7 +172,7 @@ void main() {
         roughness = 0.8;                // Rough
         metallic = 0.0;                 // Non-metallic
         ambientStrength = 0.001;        // Low ambient
-        lightIntensity = 8.0;           // Same light intensity
+        lightIntensity = material.lightIntensity;  // Use GUI-controlled light intensity
         emissive = vec3(0.0);           // No emission
         emissiveStrength = 0.0;
     }
