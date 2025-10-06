@@ -146,6 +146,22 @@ void ImGuiManager::renderMaterialPanel() {
     changed |= ImGui::SliderFloat("Sun Intensity", &controls_.lightIntensity, 0.0f, 20.0f);
     
     ImGui::Separator();
+    ImGui::Text("Emissive (Glow)");
+    changed |= ImGui::ColorEdit3("Emissive Color", &controls_.emissiveR, ImGuiColorEditFlags_Float);
+    changed |= ImGui::SliderFloat("Emissive Strength", &controls_.emissiveStrength, 0.0f, 10.0f);
+    
+    // Emissive color preview
+    if (controls_.emissiveStrength > 0.0f) {
+        ImVec4 emissivePreview(
+            controls_.emissiveR * controls_.emissiveStrength,
+            controls_.emissiveG * controls_.emissiveStrength,
+            controls_.emissiveB * controls_.emissiveStrength,
+            1.0f
+        );
+        ImGui::ColorButton("Emissive Preview", emissivePreview, 0, ImVec2(100, 30));
+    }
+    
+    ImGui::Separator();
     ImGui::Text("Sun Direction");
     changed |= ImGui::SliderFloat("Yaw (Horizontal)", &controls_.lightYaw, 0.0f, 360.0f);
     changed |= ImGui::SliderFloat("Pitch (Vertical)", &controls_.lightPitch, 0.0f, 90.0f);
@@ -170,6 +186,10 @@ void ImGuiManager::renderMaterialPanel() {
         controls_.lightIntensity = 8.0f;
         controls_.lightYaw = 225.0f;
         controls_.lightPitch = 45.0f;
+        controls_.emissiveR = 0.0f;
+        controls_.emissiveG = 0.0f;
+        controls_.emissiveB = 0.0f;
+        controls_.emissiveStrength = 0.0f;
         controls_.currentPreset = 0;
         controls_.valuesChanged = true;
     }

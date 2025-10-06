@@ -37,6 +37,10 @@ public:
         float lightIntensity = 8.0f;
         float lightYaw = 225.0f;
         float lightPitch = 45.0f;
+        float emissiveR = 0.0f;
+        float emissiveG = 0.0f;
+        float emissiveB = 0.0f;
+        float emissiveStrength = 0.0f;
         int currentPreset = 0;  // 0 = Custom
         bool valuesChanged = false;
     };

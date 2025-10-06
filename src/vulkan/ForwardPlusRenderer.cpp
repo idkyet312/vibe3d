@@ -946,6 +946,10 @@ void ForwardPlusRenderer::renderScene(const CameraUBO& camera, std::span<const P
             materialConfig_.lightIntensity = controls.lightIntensity;
             materialConfig_.lightYaw = controls.lightYaw;
             materialConfig_.lightPitch = controls.lightPitch;
+            materialConfig_.emissiveR = controls.emissiveR;
+            materialConfig_.emissiveG = controls.emissiveG;
+            materialConfig_.emissiveB = controls.emissiveB;
+            materialConfig_.emissiveStrength = controls.emissiveStrength;
             
             // Calculate light direction from angles
             float yawRad = glm::radians(materialConfig_.lightYaw);
