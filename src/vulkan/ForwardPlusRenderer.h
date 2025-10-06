@@ -227,6 +227,8 @@ private:
         float emissiveG = 0.0f;
         float emissiveB = 0.0f;
         float emissiveStrength = 0.0f;
+        float lightYaw = 225.0f;        // Horizontal angle in degrees
+        float lightPitch = 45.0f;       // Vertical angle in degrees
     } materialConfig_;
     
     // Helper to load material config from JSON file

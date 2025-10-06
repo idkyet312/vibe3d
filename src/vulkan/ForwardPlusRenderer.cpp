@@ -1499,6 +1499,25 @@ void ForwardPlusRenderer::loadMaterialConfig() {
             if (config.contains("emissiveStrength")) {
                 materialConfig_.emissiveStrength = config["emissiveStrength"].get<float>();
             }
+            if (config.contains("lightYaw")) {
+                materialConfig_.lightYaw = config["lightYaw"].get<float>();
+            }
+            if (config.contains("lightPitch")) {
+                materialConfig_.lightPitch = config["lightPitch"].get<float>();
+            }
+            
+            // Convert angles to direction vector
+            // Yaw: 0° = +X, 90° = +Z, 180° = -X, 270° = -Z
+            // Pitch: 0° = horizontal, 90° = straight down
+            float yawRad = glm::radians(materialConfig_.lightYaw);
+            float pitchRad = glm::radians(materialConfig_.lightPitch);
+            
+            lightDirection_ = glm::vec3(
+                cos(pitchRad) * cos(yawRad),
+                -sin(pitchRad),  // Negative because we want the light pointing down
+                cos(pitchRad) * sin(yawRad)
+            );
+            lightDirection_ = glm::normalize(lightDirection_);
             
             std::cout << "Loaded material config: roughness=" << materialConfig_.roughness 
                       << ", metallic=" << materialConfig_.metallic 

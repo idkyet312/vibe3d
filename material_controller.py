@@ -30,7 +30,9 @@ class MaterialController(QMainWindow):
             "emissiveR": 0.0,
             "emissiveG": 0.0,
             "emissiveB": 0.0,
-            "emissiveStrength": 0.0
+            "emissiveStrength": 0.0,
+            "lightYaw": 225.0,      # Horizontal angle (degrees)
+            "lightPitch": 45.0      # Vertical angle (degrees)
         }
         
         self.init_ui()
@@ -39,7 +41,7 @@ class MaterialController(QMainWindow):
         
     def init_ui(self):
         self.setWindowTitle("Vibe3D Material Controller")
-        self.setGeometry(100, 100, 400, 550)
+        self.setGeometry(100, 100, 400, 650)
         
         # Main widget and layout
         main_widget = QWidget()
@@ -99,6 +101,13 @@ class MaterialController(QMainWindow):
         )
         self.light_intensity_slider, self.light_intensity_spin = self.create_slider_row(
             "Sun Intensity:", 0.0, 20.0, 8.0, lighting_layout
+        )
+        
+        self.light_yaw_slider, self.light_yaw_spin = self.create_slider_row(
+            "Sun Direction (Yaw):", 0.0, 360.0, 225.0, lighting_layout
+        )
+        self.light_pitch_slider, self.light_pitch_spin = self.create_slider_row(
+            "Sun Angle (Pitch):", 0.0, 90.0, 45.0, lighting_layout
         )
         
         lighting_group.setLayout(lighting_layout)
@@ -163,6 +172,8 @@ class MaterialController(QMainWindow):
         self.material_values["metallic"] = self.metallic_spin.value()
         self.material_values["ambientStrength"] = self.ambient_spin.value()
         self.material_values["lightIntensity"] = self.light_intensity_spin.value()
+        self.material_values["lightYaw"] = self.light_yaw_spin.value()
+        self.material_values["lightPitch"] = self.light_pitch_spin.value()
         
         self.update_color_preview()
         self.status_label.setText("Material changed - will auto-save...")
@@ -215,6 +226,8 @@ class MaterialController(QMainWindow):
         self.metallic_spin.setValue(self.material_values["metallic"])
         self.ambient_spin.setValue(self.material_values["ambientStrength"])
         self.light_intensity_spin.setValue(self.material_values["lightIntensity"])
+        self.light_yaw_spin.setValue(self.material_values["lightYaw"])
+        self.light_pitch_spin.setValue(self.material_values["lightPitch"])
         self.update_color_preview()
     
     def reset_to_defaults(self):
@@ -230,7 +243,9 @@ class MaterialController(QMainWindow):
             "emissiveR": 0.0,
             "emissiveG": 0.0,
             "emissiveB": 0.0,
-            "emissiveStrength": 0.0
+            "emissiveStrength": 0.0,
+            "lightYaw": 225.0,
+            "lightPitch": 45.0
         }
         self.update_all_displays()
         self.save_config()
