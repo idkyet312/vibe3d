@@ -117,6 +117,11 @@ int main() {
     
     input->initialize(window);
     
+    // If using Vulkan, restore input callbacks after ImGui initialization
+    if (useVulkan) {
+        input->restoreCallbacks(window);
+    }
+    
     std::cout << "\n=== CONTROLS ===" << std::endl;
     std::cout << "WASD   - Move camera" << std::endl;
     std::cout << "Mouse  - Look around" << std::endl;

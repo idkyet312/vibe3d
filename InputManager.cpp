@@ -1,9 +1,11 @@
 #include "InputManager.h"
 #include <glm/gtc/matrix_transform.hpp>
+#include <imgui.h>
 #include <cmath>
 #include <iostream> // For std::cout
 
 InputManager* InputManager::instance = nullptr;
+GLFWcursorposfun InputManager::imguiCursorPosCallback = nullptr;
 
 InputManager::InputManager() 
     : cameraFront(0.0f, 0.0f, -1.0f)
@@ -24,6 +26,14 @@ InputManager::InputManager()
 
 void InputManager::initialize(GLFWwindow* window) {
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+    // Don't set callback here - will be set after ImGui initializes
+}
+
+void InputManager::restoreCallbacks(GLFWwindow* window) {
+    // Store ImGui's callback so we can chain it
+    imguiCursorPosCallback = glfwSetCursorPosCallback(window, nullptr);
+    
+    // Now set our callback which will call both
     glfwSetCursorPosCallback(window, mouse_callback);
 }
 
@@ -134,6 +144,12 @@ void InputManager::handleMouseMovement(double xpos, double ypos) {
         return;
     }
     
+    // Check if ImGui wants to capture the mouse
+    ImGuiIO& io = ImGui::GetIO();
+    if (io.WantCaptureMouse) {
+        return;
+    }
+    
     if (firstMouse) {
         lastX = static_cast<float>(xpos);
         lastY = static_cast<float>(ypos);
@@ -169,6 +185,12 @@ void InputManager::setCameraProperties(float sensitivity, float speed) {
 }
 
 void InputManager::mouse_callback(GLFWwindow* window, double xpos, double ypos) {
+    // First, call ImGui's callback if it exists
+    if (imguiCursorPosCallback) {
+        imguiCursorPosCallback(window, xpos, ypos);
+    }
+    
+    // Then call our camera handling
     if (instance) {
         instance->handleMouseMovement(xpos, ypos);
     }

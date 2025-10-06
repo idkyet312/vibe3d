@@ -1338,8 +1338,8 @@ void ForwardPlusRenderer::updateShadowUBO() {
 }
 
 void ForwardPlusRenderer::updateMaterialUBO() {
-    // Load material config from JSON file (updated by GUI)
-    loadMaterialConfig();
+    // Material config is now updated directly from ImGui in renderScene()
+    // No need to load from JSON file anymore
     
     MaterialUBO materialUBO{};
     

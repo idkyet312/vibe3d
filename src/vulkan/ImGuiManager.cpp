@@ -48,11 +48,15 @@ bool ImGuiManager::initialize(GLFWwindow* window, VkInstance instance, VkPhysica
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    
+    // Don't capture mouse when not hovering ImGui windows
+    io.ConfigWindowsMoveFromTitleBarOnly = true;
 
     // Setup style
     ImGui::StyleColorsDark();
 
     // Initialize ImGui for GLFW and Vulkan
+    // Pass true to install callbacks - ImGui will handle input when camera is frozen
     ImGui_ImplGlfw_InitForVulkan(window, true);
     
     ImGui_ImplVulkan_InitInfo initInfo = {};

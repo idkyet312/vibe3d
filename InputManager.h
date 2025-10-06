@@ -10,6 +10,9 @@ public:
     // Initialization
     void initialize(GLFWwindow* window);
     
+    // Restore callbacks (call after ImGui init)
+    void restoreCallbacks(GLFWwindow* window);
+    
     // Input processing
     void processInput(GLFWwindow* window, float deltaTime);
     
@@ -55,6 +58,9 @@ private:
     bool shadowDebugKeyPressed;
     bool cameraFreezeKeyPressed;
     bool cameraFrozen;
+    
+    // Chained callback for ImGui compatibility
+    static GLFWcursorposfun imguiCursorPosCallback;
     
     // Static callback functions
     static void mouse_callback(GLFWwindow* window, double xpos, double ypos);
