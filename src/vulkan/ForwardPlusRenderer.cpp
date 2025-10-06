@@ -1225,7 +1225,7 @@ bool ForwardPlusRenderer::createShadowSampler() {
 
 void ForwardPlusRenderer::calculateCascadeSplits() {
     float nearPlane = 0.1f;
-    float farPlane = 100.0f;
+    float farPlane = 200.0f;  // Extended far plane for larger coverage
     float range = farPlane - nearPlane;
     float ratio = farPlane / nearPlane;
     
@@ -1234,7 +1234,7 @@ void ForwardPlusRenderer::calculateCascadeSplits() {
         float p = (i + 1) / static_cast<float>(NUM_CASCADES);
         float log = nearPlane * std::pow(ratio, p);
         float uniform = nearPlane + range * p;
-        float d = 0.95f * log + 0.05f * uniform; // Blend between logarithmic and uniform
+        float d = 0.90f * log + 0.10f * uniform; // More logarithmic distribution
         cascadeSplits_[i] = (d - nearPlane) / range;
     }
     

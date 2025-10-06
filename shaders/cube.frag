@@ -106,38 +106,42 @@ float calculateShadowPCF(vec4 fragPosLight, int cascadeIndex, float bias) {
     // Transform to [0,1] range
     projCoords = projCoords * 0.5 + 0.5;
     
-    // Outside shadow map bounds - no shadow
+    // Outside shadow map bounds - fully lit
     if (projCoords.z > 1.0 || projCoords.x < 0.0 || projCoords.x > 1.0 || 
         projCoords.y < 0.0 || projCoords.y > 1.0) {
         return 1.0;
     }
     
+    // Get current fragment depth
     float currentDepth = projCoords.z;
     
-    // PCF with 3x3 kernel
-    float shadow = 0.0;
-    vec2 texelSize = 1.0 / textureSize(shadowMaps[cascadeIndex], 0).xy;
+    // Sample shadow map - simple comparison without PCF for now
+    float closestDepth = texture(shadowMaps[cascadeIndex], projCoords.xy).r;
+    
+    // Simple shadow comparison
+    float shadow = (currentDepth - bias) > closestDepth ? 0.0 : 1.0;
+    
+    // PCF for smoother shadows
+    float shadowSum = 0.0;
+    vec2 texelSize = 1.0 / vec2(textureSize(shadowMaps[cascadeIndex], 0));
     
     for(int x = -1; x <= 1; ++x) {
         for(int y = -1; y <= 1; ++y) {
             vec2 offset = vec2(x, y) * texelSize;
             float pcfDepth = texture(shadowMaps[cascadeIndex], projCoords.xy + offset).r;
-            shadow += (currentDepth - bias) > pcfDepth ? 0.0 : 1.0;
+            shadowSum += (currentDepth - bias) > pcfDepth ? 0.0 : 1.0;
         }
     }
     
-    shadow /= 9.0; // Average of 9 samples
-    
-    return shadow;
+    return shadowSum / 9.0; // Average of 9 samples
 }
 
 // Calculate shadow with cascade selection
 float calculateCascadedShadow(vec3 N, vec3 L) {
     int cascadeIndex = selectCascadeIndex();
     
-    // Adaptive bias based on surface angle and cascade level
-    float bias = max(0.005 * (1.0 - dot(N, L)), 0.0005);
-    bias *= (1.0 + float(cascadeIndex) * 0.5); // Increase bias for farther cascades
+    // Strong bias to prevent shadow acne
+    float bias = max(0.01 * (1.0 - dot(N, L)), 0.005);
     
     return calculateShadowPCF(fragPosLightSpace[cascadeIndex], cascadeIndex, bias);
 }
@@ -246,20 +250,24 @@ void main() {
     // Gamma correction
     color = pow(color, vec3(1.0/2.2));
     
-    // Debug: Visualize cascade selection and shadows
+    // Debug: Visualize shadows directly
     int cascadeIndex = selectCascadeIndex();
     float shadowValue = calculateCascadedShadow(N, normalize(-shadow.lightDirection));
     
-    // Show cascade colors and shadow intensity
+    // Show cascade colors modulated by shadow
     vec3 cascadeColors[4] = vec3[](
-        vec3(1.0, 0.3, 0.3),  // Red - cascade 0
-        vec3(0.3, 1.0, 0.3),  // Green - cascade 1  
-        vec3(0.3, 0.3, 1.0),  // Blue - cascade 2
-        vec3(1.0, 1.0, 0.3)   // Yellow - cascade 3
+        vec3(1.0, 0.2, 0.2),  // Red - cascade 0
+        vec3(0.2, 1.0, 0.2),  // Green - cascade 1  
+        vec3(0.2, 0.2, 1.0),  // Blue - cascade 2
+        vec3(1.0, 1.0, 0.2)   // Yellow - cascade 3
     );
     
-    // Mix cascade color visualization with actual rendering
-    color = mix(color, cascadeColors[cascadeIndex] * shadowValue, 0.4);
+    // Debug mode: Show cascades with shadow darkening
+    // Darker areas = shadowed, Bright colors = lit
+    vec3 debugColor = cascadeColors[cascadeIndex] * shadowValue;
+    
+    // Mix 50% debug visualization with actual PBR rendering
+    color = mix(color, debugColor, 0.5);
     
     outColor = vec4(color, 1.0);
 }
