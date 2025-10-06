@@ -11,7 +11,7 @@ InputManager::InputManager()
     : cameraFront(0.0f, 0.0f, -1.0f)
     , cameraUp(0.0f, 1.0f, 0.0f)
     , lastX(400.0f), lastY(300.0f)
-    , yaw(-90.0f), pitch(0.0f)
+    , yaw(180.0f), pitch(-9.5f)  // Looking at cube from the right side at 90 degree angle
     , firstMouse(true)
     , mouseSensitivity(0.15f)
     , cameraSpeed(6.5f)

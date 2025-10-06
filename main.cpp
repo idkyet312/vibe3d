@@ -140,7 +140,7 @@ int main() {
     float lastFrame = 0.0f;
     float fpsTimer = 0.0f;
     int frameCount = 0;
-    glm::vec3 cameraPos(3.0f, 2.5f, 5.0f);  // Higher camera position to see shadows on floor
+    glm::vec3 cameraPos(6.0f, 3.0f, 0.0f);  // Position camera at right angle to the cube
     glm::vec3 mainObjPos(0, 2, 0);
 
     // Main loop
