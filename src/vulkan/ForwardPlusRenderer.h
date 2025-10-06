@@ -134,7 +134,7 @@ private:
     
     // Shadow mapping resources
     static constexpr size_t NUM_CASCADES = 4;
-    static constexpr uint32_t SHADOW_MAP_SIZE = 2048;
+    static constexpr uint32_t SHADOW_MAP_SIZE = 4096;
     std::array<std::unique_ptr<VulkanImage>, NUM_CASCADES> shadowImages_;
     std::array<VkImageView, NUM_CASCADES> shadowImageViews_{};
     VkSampler shadowSampler_ = VK_NULL_HANDLE;
@@ -197,6 +197,20 @@ private:
     
     // Mesh data
     uint32_t indexCount_ = 0;
+    
+    // Shadow bias configuration (loaded from JSON)
+    struct ShadowBiasConfig {
+        float depthBiasConstant = 1.345f;
+        float depthBiasSlope = 1.627f;
+        float receiverBiasMultiplier = 0.159f;
+        float cascade0 = 2.277f;
+        float cascade1 = 1.5f;
+        float cascade2 = 3.0f;
+        float cascade3 = 6.0f;
+    } shadowBiasConfig_;
+    
+    // Helper to load shadow bias from JSON file
+    void loadShadowBiasConfig();
     
     // Debug mode
     int shadowDebugMode_ = 0;  // 0 = normal, 1 = show shadows, 2 = show cascades  // NEW

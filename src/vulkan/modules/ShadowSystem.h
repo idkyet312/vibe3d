@@ -22,7 +22,7 @@ namespace vibe::vk {
 class ShadowSystem {
 public:
     static constexpr size_t NUM_CASCADES = 4;
-    static constexpr uint32_t SHADOW_MAP_SIZE = 2048;
+    static constexpr uint32_t SHADOW_MAP_SIZE = 4096;
 
     explicit ShadowSystem(VulkanDevice& device);
     ~ShadowSystem();

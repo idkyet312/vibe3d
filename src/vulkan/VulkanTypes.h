@@ -88,7 +88,8 @@ struct ShadowUBO {
     alignas(16) glm::mat4 lightSpaceMatrices[4]; // 4 cascades
     alignas(16) glm::vec4 cascadeSplits; // x, y, z = split distances, w = num cascades
     alignas(16) glm::vec3 lightDirection;
-    alignas(4) float padding;
+    alignas(4) float receiverBiasMultiplier; // NEW: for shader-side bias
+    alignas(16) glm::vec4 cascadeBiasValues; // NEW: x=cascade0, y=cascade1, z=cascade2, w=cascade3
 };
 
 struct ModelUBO {

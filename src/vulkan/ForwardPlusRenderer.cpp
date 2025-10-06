@@ -2,11 +2,14 @@
 #include "modules/GeometryManager.h"
 #include <GLFW/glfw3.h>
 #include <glm/gtc/matrix_transform.hpp>
+#include <nlohmann/json.hpp>
 #include <iostream>
 #include <array>
 #include <cmath>
 #include <fstream>
 #include <limits>
+
+using json = nlohmann::json;
 
 namespace vibe::vk {
 
@@ -694,12 +697,12 @@ bool ForwardPlusRenderer::createShadowPipeline() {
         .depthClampEnable = VK_FALSE,
         .rasterizerDiscardEnable = VK_FALSE,
         .polygonMode = VK_POLYGON_MODE_FILL,
-        .cullMode = VK_CULL_MODE_BACK_BIT,
+        .cullMode = VK_CULL_MODE_BACK_BIT,  // Standard back-face culling
         .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
-        .depthBiasEnable = VK_TRUE,  // Enable depth bias for shadow maps
-        .depthBiasConstantFactor = 1.25f,
+        .depthBiasEnable = VK_TRUE,
+        .depthBiasConstantFactor = 2.0f,  // Moderate constant bias
         .depthBiasClamp = 0.0f,
-        .depthBiasSlopeFactor = 1.75f,
+        .depthBiasSlopeFactor = 2.25f,     // Moderate slope factor
         .lineWidth = 1.0f
     };
     
@@ -1222,6 +1225,9 @@ glm::mat4 ForwardPlusRenderer::calculateLightSpaceMatrix(float nearPlane, float 
 }
 
 void ForwardPlusRenderer::updateShadowUBO() {
+    // Load shadow bias config from JSON file (updated by GUI)
+    loadShadowBiasConfig();
+    
     ShadowUBO shadowUBO{};
     
     // Calculate light space matrices for each cascade
@@ -1233,12 +1239,21 @@ void ForwardPlusRenderer::updateShadowUBO() {
     
     shadowUBO.cascadeSplits = glm::vec4(cascadeSplits_[0], cascadeSplits_[1], cascadeSplits_[2], NUM_CASCADES);
     shadowUBO.lightDirection = lightDirection_;
-    shadowUBO.padding = 0.0f;
+    shadowUBO.receiverBiasMultiplier = shadowBiasConfig_.receiverBiasMultiplier;
+    shadowUBO.cascadeBiasValues = glm::vec4(
+        shadowBiasConfig_.cascade0,
+        shadowBiasConfig_.cascade1,
+        shadowBiasConfig_.cascade2,
+        shadowBiasConfig_.cascade3
+    );
     
     shadowBuffers_[currentFrame_]->copyFrom(&shadowUBO, sizeof(ShadowUBO));
 }
 
 void ForwardPlusRenderer::renderShadowCascades(VkCommandBuffer cmd) {
+    // Load shadow bias config from JSON file (updated by GUI)
+    loadShadowBiasConfig();
+    
     // Render scene geometry from light's perspective for each cascade
     for (size_t i = 0; i < NUM_CASCADES; ++i) {
         VkClearValue clearValue{};
@@ -1260,6 +1275,12 @@ void ForwardPlusRenderer::renderShadowCascades(VkCommandBuffer cmd) {
         
         // Bind shadow pipeline
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadowPipeline_);
+        
+        // Set dynamic depth bias from loaded config
+        vkCmdSetDepthBias(cmd, 
+                         shadowBiasConfig_.depthBiasConstant,
+                         0.0f,  // depthBiasClamp
+                         shadowBiasConfig_.depthBiasSlope);
         
         // Bind vertex and index buffers
         VkBuffer vertexBuffers[] = {vertexBuffer_->getBuffer()};
@@ -1341,5 +1362,44 @@ bool ForwardPlusRenderer::createDepthResources() {
     
     return true;
 }
+
+void ForwardPlusRenderer::loadShadowBiasConfig() {
+    try {
+        std::ifstream configFile("shadow_config.json");
+        if (configFile.is_open()) {
+            json config;
+            configFile >> config;
+            
+            // Load values from JSON
+            if (config.contains("depthBiasConstant")) {
+                shadowBiasConfig_.depthBiasConstant = config["depthBiasConstant"].get<float>();
+            }
+            if (config.contains("depthBiasSlope")) {
+                shadowBiasConfig_.depthBiasSlope = config["depthBiasSlope"].get<float>();
+            }
+            if (config.contains("receiverBiasMultiplier")) {
+                shadowBiasConfig_.receiverBiasMultiplier = config["receiverBiasMultiplier"].get<float>();
+            }
+            if (config.contains("cascade0")) {
+                shadowBiasConfig_.cascade0 = config["cascade0"].get<float>();
+            }
+            if (config.contains("cascade1")) {
+                shadowBiasConfig_.cascade1 = config["cascade1"].get<float>();
+            }
+            if (config.contains("cascade2")) {
+                shadowBiasConfig_.cascade2 = config["cascade2"].get<float>();
+            }
+            if (config.contains("cascade3")) {
+                shadowBiasConfig_.cascade3 = config["cascade3"].get<float>();
+            }
+            
+            std::cout << "Loaded shadow bias config: constant=" << shadowBiasConfig_.depthBiasConstant 
+                      << ", slope=" << shadowBiasConfig_.depthBiasSlope << std::endl;
+        }
+    } catch (const std::exception& e) {
+        std::cout << "Using default shadow bias config (config file not found or invalid)" << std::endl;
+    }
+}
+
 
 } // namespace vibe::vk

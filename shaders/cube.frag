@@ -18,7 +18,8 @@ layout(set = 0, binding = 1) uniform ShadowUBO {
     mat4 lightSpaceMatrices[4]; // 4 cascades
     vec4 cascadeSplits; // x, y, z = split distances, w = unused
     vec3 lightDirection;
-    float padding;
+    float receiverBiasMultiplier; // NEW: for shader-side bias
+    vec4 cascadeBiasValues; // NEW: x=cascade0, y=cascade1, z=cascade2, w=cascade3
 } shadow;
 
 layout(set = 0, binding = 2) uniform sampler2D shadowMaps[4]; // 4 individual shadow maps for cascades
@@ -97,44 +98,46 @@ int selectCascadeIndex() {
     }
 }
 
-float calculateShadowPCF(vec4 fragPosLight, int cascadeIndex, float bias) {
-    // Perspective divide
+float calculateShadowPCF(vec4 fragPosLight, int cascadeIndex, float baseBias) {
     vec3 projCoords = fragPosLight.xyz / fragPosLight.w;
-    
-    // Transform to [0,1] range
-    projCoords = projCoords * 0.5 + 0.5;
-    
-    // Outside shadow map bounds - fully lit
-    if (projCoords.z > 1.0 || projCoords.x < 0.0 || projCoords.x > 1.0 || 
-        projCoords.y < 0.0 || projCoords.y > 1.0) {
+    vec3 projCoords01 = projCoords * 0.5 + 0.5;
+
+    if (projCoords01.z > 1.0 || projCoords01.x < 0.0 || projCoords01.x > 1.0 ||
+        projCoords01.y < 0.0 || projCoords01.y > 1.0) {
         return 1.0;
     }
-    
-    float currentDepth = projCoords.z;
-    
-    // PCF for smoother shadows
-    float shadowSum = 0.0;
+
     vec2 texelSize = 1.0 / vec2(textureSize(shadowMaps[cascadeIndex], 0));
     
-    for(int x = -1; x <= 1; ++x) {
-        for(int y = -1; y <= 1; ++y) {
+    // Use bias multiplier from UBO (controlled by GUI)
+    float bias = baseBias * shadow.receiverBiasMultiplier;
+
+    float shadowSum = 0.0;
+    float currentDepth = projCoords01.z;
+    const int kernelRadius = 2;
+    const float sampleCount = float((kernelRadius * 2 + 1) * (kernelRadius * 2 + 1));
+
+    for (int x = -kernelRadius; x <= kernelRadius; ++x) {
+        for (int y = -kernelRadius; y <= kernelRadius; ++y) {
             vec2 offset = vec2(x, y) * texelSize;
-            float pcfDepth = texture(shadowMaps[cascadeIndex], projCoords.xy + offset).r;
+            float pcfDepth = texture(shadowMaps[cascadeIndex], projCoords01.xy + offset).r;
             shadowSum += (currentDepth - bias) > pcfDepth ? 0.0 : 1.0;
         }
     }
-    
-    return shadowSum / 9.0;
+
+    return shadowSum / sampleCount;
 }
 
-float calculateCascadedShadow(vec3 N, vec3 L) {
+float calculateCascadedShadow(vec3 worldPos, vec3 N, vec3 L) {
     int cascadeIndex = selectCascadeIndex();
+
+    // No normal offset - rely entirely on depth bias
+    vec4 lightSpace = shadow.lightSpaceMatrices[cascadeIndex] * vec4(worldPos, 1.0);
     
-    // MUCH higher bias to completely eliminate self-shadowing
-    // The bias scales with the angle between surface normal and light direction
-    float bias = max(0.1 * (1.0 - dot(N, L)), 0.01);
-    
-    return calculateShadowPCF(fragPosLightSpace[cascadeIndex], cascadeIndex, bias);
+    // Use cascade-specific receiver bias from UBO (controlled by GUI)
+    float receiverBias = shadow.cascadeBiasValues[cascadeIndex];
+
+    return calculateShadowPCF(lightSpace, cascadeIndex, receiverBias);
 }
 
 void main() {
@@ -173,7 +176,7 @@ void main() {
     vec3 diffuse = (kD * albedo / PI) * diffuseFactor;
     
     // Calculate shadow
-    float shadowFactor = calculateCascadedShadow(N, L);
+    float shadowFactor = calculateCascadedShadow(fragPos, N, L);
     
     // Debug modes (Press B to cycle: 0=normal, 1=shadows, 2=cascades)
     if (pushConstants.debugMode == 1) {
@@ -182,7 +185,7 @@ void main() {
         return;
     } else if (pushConstants.debugMode == 2) {
         // Show cascade levels
-        int cascadeIndex = selectCascadeIndex();
+    int cascadeIndex = selectCascadeIndex();
         vec3 cascadeColor = vec3(0.0);
         if (cascadeIndex == 0) cascadeColor = vec3(1.0, 0.0, 0.0);      // Red
         else if (cascadeIndex == 1) cascadeColor = vec3(0.0, 1.0, 0.0); // Green

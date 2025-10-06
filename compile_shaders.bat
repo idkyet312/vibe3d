@@ -49,4 +49,3 @@ echo.
 echo Shader files created:
 dir /b *.spv
 echo.
-pause
