@@ -77,11 +77,11 @@ void GeometryManager::createCubeMesh(std::vector<Vertex>& vertices, std::vector<
         {{-0.5f,  0.5f,  0.5f}, {-1.0f,  0.0f,  0.0f}, {1.0f, 1.0f}, {0.2f, 1.0f, 1.0f}},
         {{-0.5f,  0.5f, -0.5f}, {-1.0f,  0.0f,  0.0f}, {0.0f, 1.0f}, {0.2f, 1.0f, 1.0f}},
         
-        // Floor plane (large, below the cube) - Gray
-        {{-5.0f, -2.0f,  5.0f}, { 0.0f,  1.0f,  0.0f}, {0.0f, 0.0f}, {0.3f, 0.3f, 0.35f}},
-        {{ 5.0f, -2.0f,  5.0f}, { 0.0f,  1.0f,  0.0f}, {5.0f, 0.0f}, {0.3f, 0.3f, 0.35f}},
-        {{ 5.0f, -2.0f, -5.0f}, { 0.0f,  1.0f,  0.0f}, {5.0f, 5.0f}, {0.3f, 0.3f, 0.35f}},
-        {{-5.0f, -2.0f, -5.0f}, { 0.0f,  1.0f,  0.0f}, {0.0f, 5.0f}, {0.3f, 0.3f, 0.35f}}
+        // Floor plane (very wide, below the cube) - Gray
+        {{-50.0f, -2.0f,  50.0f}, { 0.0f,  1.0f,  0.0f}, {0.0f, 0.0f}, {0.3f, 0.3f, 0.35f}},
+        {{ 50.0f, -2.0f,  50.0f}, { 0.0f,  1.0f,  0.0f}, {50.0f, 0.0f}, {0.3f, 0.3f, 0.35f}},
+        {{ 50.0f, -2.0f, -50.0f}, { 0.0f,  1.0f,  0.0f}, {50.0f, 50.0f}, {0.3f, 0.3f, 0.35f}},
+        {{-50.0f, -2.0f, -50.0f}, { 0.0f,  1.0f,  0.0f}, {0.0f, 50.0f}, {0.3f, 0.3f, 0.35f}}
     };
     
     // Counter-clockwise winding order for proper culling
