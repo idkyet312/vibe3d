@@ -39,7 +39,7 @@ class MaterialController(QMainWindow):
         
     def init_ui(self):
         self.setWindowTitle("Vibe3D Material Controller")
-        self.setGeometry(100, 100, 400, 300)
+        self.setGeometry(100, 100, 400, 450)
         
         # Main widget and layout
         main_widget = QWidget()
@@ -47,7 +47,7 @@ class MaterialController(QMainWindow):
         layout = QVBoxLayout(main_widget)
         
         # Title
-        title = QLabel("Cube Color Controller")
+        title = QLabel("Cube Material Controller")
         title.setStyleSheet("font-size: 16px; font-weight: bold; padding: 10px;")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title)
@@ -76,6 +76,20 @@ class MaterialController(QMainWindow):
         albedo_group.setLayout(albedo_layout)
         layout.addWidget(albedo_group)
         
+        # Material Properties group
+        material_group = QGroupBox("Material Properties")
+        material_layout = QVBoxLayout()
+        
+        self.roughness_slider, self.roughness_spin = self.create_slider_row(
+            "Roughness:", 0.0, 1.0, 0.5, material_layout
+        )
+        self.metallic_slider, self.metallic_spin = self.create_slider_row(
+            "Metallic:", 0.0, 1.0, 0.0, material_layout
+        )
+        
+        material_group.setLayout(material_layout)
+        layout.addWidget(material_group)
+        
         # Control buttons
         button_layout = QHBoxLayout()
         
@@ -86,7 +100,7 @@ class MaterialController(QMainWindow):
         layout.addLayout(button_layout)
         
         # Status label
-        self.status_label = QLabel("Ready - Color will be saved automatically")
+        self.status_label = QLabel("Ready - Material will be saved automatically")
         self.status_label.setStyleSheet("padding: 5px; background-color: #e0e0e0;")
         layout.addWidget(self.status_label)
         
@@ -131,9 +145,11 @@ class MaterialController(QMainWindow):
         self.material_values["albedoR"] = self.albedo_r_spin.value()
         self.material_values["albedoG"] = self.albedo_g_spin.value()
         self.material_values["albedoB"] = self.albedo_b_spin.value()
+        self.material_values["roughness"] = self.roughness_spin.value()
+        self.material_values["metallic"] = self.metallic_spin.value()
         
         self.update_color_preview()
-        self.status_label.setText("Color changed - will auto-save...")
+        self.status_label.setText("Material changed - will auto-save...")
     
     def update_color_preview(self):
         """Update the albedo color preview box"""
@@ -157,7 +173,7 @@ class MaterialController(QMainWindow):
         try:
             with open(self.config_file, 'w') as f:
                 json.dump(self.material_values, f, indent=2)
-            self.status_label.setText("Color saved successfully!")
+            self.status_label.setText("Material saved successfully!")
             self.status_label.setStyleSheet("padding: 5px; background-color: #90EE90;")
             QTimer.singleShot(2000, lambda: self.status_label.setStyleSheet("padding: 5px; background-color: #e0e0e0;"))
         except Exception as e:
@@ -179,6 +195,8 @@ class MaterialController(QMainWindow):
         self.albedo_r_spin.setValue(self.material_values["albedoR"])
         self.albedo_g_spin.setValue(self.material_values["albedoG"])
         self.albedo_b_spin.setValue(self.material_values["albedoB"])
+        self.roughness_spin.setValue(self.material_values["roughness"])
+        self.metallic_spin.setValue(self.material_values["metallic"])
         self.update_color_preview()
     
     def reset_to_defaults(self):
@@ -198,7 +216,7 @@ class MaterialController(QMainWindow):
         }
         self.update_all_displays()
         self.save_config()
-        self.status_label.setText("Reset to default color!")
+        self.status_label.setText("Reset to default material!")
         self.status_label.setStyleSheet("padding: 5px; background-color: #90EE90;")
         QTimer.singleShot(2000, lambda: self.status_label.setStyleSheet("padding: 5px; background-color: #e0e0e0;"))
 
