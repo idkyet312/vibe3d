@@ -14,6 +14,38 @@ PostProcessManager::~PostProcessManager() {
     cleanup();
 }
 
+std::vector<char> PostProcessManager::readShaderFile(const std::string& filename) {
+    std::ifstream file(filename, std::ios::ate | std::ios::binary);
+    
+    if (!file.is_open()) {
+        return {};
+    }
+    
+    size_t fileSize = static_cast<size_t>(file.tellg());
+    std::vector<char> buffer(fileSize);
+    
+    file.seekg(0);
+    file.read(buffer.data(), fileSize);
+    file.close();
+    
+    return buffer;
+}
+
+VkShaderModule PostProcessManager::createShaderModule(const std::vector<char>& code) {
+    VkShaderModuleCreateInfo createInfo{
+        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .codeSize = code.size(),
+        .pCode = reinterpret_cast<const uint32_t*>(code.data())
+    };
+    
+    VkShaderModule shaderModule;
+    if (vkCreateShaderModule(device_.getDevice(), &createInfo, nullptr, &shaderModule) != VK_SUCCESS) {
+        return VK_NULL_HANDLE;
+    }
+    
+    return shaderModule;
+}
+
 bool PostProcessManager::initialize(const Config& config) {
     config_ = config;
     
@@ -157,7 +189,39 @@ bool PostProcessManager::createSceneRenderTarget() {
         }
     };
     
-    return vkCreateImageView(device_.getDevice(), &viewInfo, nullptr, &sceneColorImageView_) == VK_SUCCESS;
+    if (vkCreateImageView(device_.getDevice(), &viewInfo, nullptr, &sceneColorImageView_) != VK_SUCCESS) {
+        return false;
+    }
+    
+    // Transition image to COLOR_ATTACHMENT_OPTIMAL layout
+    VkCommandBuffer cmd = device_.beginSingleTimeCommands();
+    
+    VkImageMemoryBarrier barrier{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .srcAccessMask = 0,
+        .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+        .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        .newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .image = sceneColorImage_->getImage(),
+        .subresourceRange = {
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .baseMipLevel = 0,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = 1
+        }
+    };
+    
+    vkCmdPipelineBarrier(cmd,
+        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        0, 0, nullptr, 0, nullptr, 1, &barrier);
+    
+    device_.endSingleTimeCommands(cmd);
+    
+    return true;
 }
 
 bool PostProcessManager::createSceneRenderPass() {
@@ -169,8 +233,8 @@ bool PostProcessManager::createSceneRenderPass() {
         .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
         .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
         .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-        .finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+        .initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        .finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL  // Keep in COLOR_ATTACHMENT for now
     };
     
     // Depth attachment
@@ -227,8 +291,34 @@ bool PostProcessManager::createSceneRenderPass() {
 }
 
 bool PostProcessManager::createSceneFramebuffers(VkImageView depthView) {
-    // This will be called with the depth buffer from the main renderer
-    // For now, create a placeholder - will be updated when integrated
+    // Create framebuffers for scene rendering (HDR render target + depth)
+    // We need one framebuffer per swapchain image (even though we render to the same HDR target)
+    // This is for consistency with the rendering loop
+    
+    // Get swapchain image count (we'll create one framebuffer per swapchain image)
+    sceneFramebuffers_.resize(3); // Standard 3 frames in flight
+    
+    for (size_t i = 0; i < sceneFramebuffers_.size(); i++) {
+        std::array<VkImageView, 2> attachments = {
+            sceneColorImageView_,  // HDR color attachment
+            depthView               // Depth attachment (shared with main renderer)
+        };
+        
+        VkFramebufferCreateInfo framebufferInfo{
+            .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+            .renderPass = sceneRenderPass_,
+            .attachmentCount = static_cast<uint32_t>(attachments.size()),
+            .pAttachments = attachments.data(),
+            .width = config_.width,
+            .height = config_.height,
+            .layers = 1
+        };
+        
+        if (vkCreateFramebuffer(device_.getDevice(), &framebufferInfo, nullptr, &sceneFramebuffers_[i]) != VK_SUCCESS) {
+            return false;
+        }
+    }
+    
     return true;
 }
 
@@ -303,7 +393,7 @@ bool PostProcessManager::createBloomPipeline() {
     VkPushConstantRange pushConstant{
         .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
         .offset = 0,
-        .size = sizeof(float) * 3 // threshold, intensity, radius
+        .size = sizeof(float) * 4 // threshold, intensity, radius, padding
     };
     
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{
@@ -314,7 +404,119 @@ bool PostProcessManager::createBloomPipeline() {
         .pPushConstantRanges = &pushConstant
     };
     
-    return vkCreatePipelineLayout(device_.getDevice(), &pipelineLayoutInfo, nullptr, &bloomPipelineLayout_) == VK_SUCCESS;
+    if (vkCreatePipelineLayout(device_.getDevice(), &pipelineLayoutInfo, nullptr, &bloomPipelineLayout_) != VK_SUCCESS) {
+        return false;
+    }
+    
+    // Load shaders
+    auto vertShaderCode = readShaderFile("shaders/fullscreen.vert.spv");
+    auto fragShaderCode = readShaderFile("shaders/bloom.frag.spv");
+    
+    VkShaderModule vertShaderModule = createShaderModule(vertShaderCode);
+    VkShaderModule fragShaderModule = createShaderModule(fragShaderCode);
+    
+    VkPipelineShaderStageCreateInfo vertStageInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+        .stage = VK_SHADER_STAGE_VERTEX_BIT,
+        .module = vertShaderModule,
+        .pName = "main"
+    };
+    
+    VkPipelineShaderStageCreateInfo fragStageInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+        .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
+        .module = fragShaderModule,
+        .pName = "main"
+    };
+    
+    VkPipelineShaderStageCreateInfo shaderStages[] = {vertStageInfo, fragStageInfo};
+    
+    // No vertex input (fullscreen triangle generated in vertex shader)
+    VkPipelineVertexInputStateCreateInfo vertexInputInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+        .vertexBindingDescriptionCount = 0,
+        .vertexAttributeDescriptionCount = 0
+    };
+    
+    VkPipelineInputAssemblyStateCreateInfo inputAssembly{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+        .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+        .primitiveRestartEnable = VK_FALSE
+    };
+    
+    VkViewport viewport{
+        .x = 0.0f,
+        .y = 0.0f,
+        .width = static_cast<float>(config_.width),
+        .height = static_cast<float>(config_.height),
+        .minDepth = 0.0f,
+        .maxDepth = 1.0f
+    };
+    
+    VkRect2D scissor{
+        .offset = {0, 0},
+        .extent = {config_.width, config_.height}
+    };
+    
+    VkPipelineViewportStateCreateInfo viewportState{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+        .viewportCount = 1,
+        .pViewports = &viewport,
+        .scissorCount = 1,
+        .pScissors = &scissor
+    };
+    
+    VkPipelineRasterizationStateCreateInfo rasterizer{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+        .depthClampEnable = VK_FALSE,
+        .rasterizerDiscardEnable = VK_FALSE,
+        .polygonMode = VK_POLYGON_MODE_FILL,
+        .cullMode = VK_CULL_MODE_NONE,
+        .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
+        .depthBiasEnable = VK_FALSE,
+        .lineWidth = 1.0f
+    };
+    
+    VkPipelineMultisampleStateCreateInfo multisampling{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+        .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
+        .sampleShadingEnable = VK_FALSE
+    };
+    
+    VkPipelineColorBlendAttachmentState colorBlendAttachment{
+        .blendEnable = VK_FALSE,
+        .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                         VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT
+    };
+    
+    VkPipelineColorBlendStateCreateInfo colorBlending{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+        .logicOpEnable = VK_FALSE,
+        .attachmentCount = 1,
+        .pAttachments = &colorBlendAttachment
+    };
+    
+    VkGraphicsPipelineCreateInfo pipelineInfo{
+        .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+        .stageCount = 2,
+        .pStages = shaderStages,
+        .pVertexInputState = &vertexInputInfo,
+        .pInputAssemblyState = &inputAssembly,
+        .pViewportState = &viewportState,
+        .pRasterizationState = &rasterizer,
+        .pMultisampleState = &multisampling,
+        .pColorBlendState = &colorBlending,
+        .layout = bloomPipelineLayout_,
+        .renderPass = finalRenderPass_,
+        .subpass = 0
+    };
+    
+    VkResult result = vkCreateGraphicsPipelines(device_.getDevice(), VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &bloomPipeline_);
+    
+    vkDestroyShaderModule(device_.getDevice(), vertShaderModule, nullptr);
+    vkDestroyShaderModule(device_.getDevice(), fragShaderModule, nullptr);
+    
+    return result == VK_SUCCESS;
 }
 
 bool PostProcessManager::createFinalRenderPass() {
@@ -427,12 +629,157 @@ bool PostProcessManager::createDescriptorSets() {
         .pPoolSizes = poolSizes.data()
     };
     
-    return vkCreateDescriptorPool(device_.getDevice(), &poolInfo, nullptr, &descriptorPool_) == VK_SUCCESS;
+    if (vkCreateDescriptorPool(device_.getDevice(), &poolInfo, nullptr, &descriptorPool_) != VK_SUCCESS) {
+        return false;
+    }
+    
+    // Allocate descriptor sets for bloom (one per swapchain image)
+    bloomDescriptorSets_.resize(3); // 3 frames in flight
+    
+    std::vector<VkDescriptorSetLayout> layouts(bloomDescriptorSets_.size(), bloomDescriptorLayout_);
+    VkDescriptorSetAllocateInfo allocInfo{
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+        .descriptorPool = descriptorPool_,
+        .descriptorSetCount = static_cast<uint32_t>(bloomDescriptorSets_.size()),
+        .pSetLayouts = layouts.data()
+    };
+    
+    if (vkAllocateDescriptorSets(device_.getDevice(), &allocInfo, bloomDescriptorSets_.data()) != VK_SUCCESS) {
+        return false;
+    }
+    
+    // Update descriptor sets to point to scene color image
+    for (size_t i = 0; i < bloomDescriptorSets_.size(); i++) {
+        VkDescriptorImageInfo imageInfo{
+            .sampler = bloomSampler_,
+            .imageView = sceneColorImageView_,
+            .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+        };
+        
+        VkWriteDescriptorSet descriptorWrite{
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = bloomDescriptorSets_[i],
+            .dstBinding = 0,
+            .dstArrayElement = 0,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            .pImageInfo = &imageInfo
+        };
+        
+        vkUpdateDescriptorSets(device_.getDevice(), 1, &descriptorWrite, 0, nullptr);
+    }
+    
+    return true;
+}
+
+bool PostProcessManager::setupFramebuffers(VkImageView depthView, const std::vector<VkImageView>& swapchainViews) {
+    if (!createSceneFramebuffers(depthView)) {
+        std::cerr << "Failed to create scene framebuffers" << std::endl;
+        return false;
+    }
+    
+    if (!createFinalFramebuffers(swapchainViews)) {
+        std::cerr << "Failed to create final framebuffers" << std::endl;
+        return false;
+    }
+    
+    return true;
 }
 
 void PostProcessManager::applyPostProcessing(VkCommandBuffer cmd, VkImageView depthView, uint32_t swapchainImageIndex) {
-    // Apply bloom and composite to swapchain
-    // This is a placeholder for the full implementation
+    if (!config_.enableBloom) {
+        // If bloom is disabled, just copy scene to swapchain
+        // For now, we'll skip this and just let the scene render directly
+        return;
+    }
+    
+    // Bloom pass: render fullscreen quad with bloom shader
+    // The bloom shader samples from the scene HDR texture and applies bloom
+    
+    // Transition scene image for shader reading
+    VkImageMemoryBarrier sceneBarrier{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+        .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
+        .oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        .newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .image = sceneColorImage_->getImage(),
+        .subresourceRange = {
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .baseMipLevel = 0,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = 1
+        }
+    };
+    
+    vkCmdPipelineBarrier(cmd,
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        0, 0, nullptr, 0, nullptr, 1, &sceneBarrier);
+    
+    // Begin final render pass (renders to swapchain)
+    VkRenderPassBeginInfo renderPassInfo{
+        .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+        .renderPass = finalRenderPass_,
+        .framebuffer = finalFramebuffers_[swapchainImageIndex],
+        .renderArea = {
+            .offset = {0, 0},
+            .extent = {config_.width, config_.height}
+        }
+    };
+    
+    VkClearValue clearValue{};
+    clearValue.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+    renderPassInfo.clearValueCount = 1;
+    renderPassInfo.pClearValues = &clearValue;
+    
+    vkCmdBeginRenderPass(cmd, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+    
+    // Bind bloom pipeline
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, bloomPipeline_);
+    
+    // Bind descriptor set (scene texture)
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, bloomPipelineLayout_,
+                           0, 1, &bloomDescriptorSets_[swapchainImageIndex], 0, nullptr);
+    
+    // Push constants for bloom parameters
+    struct BloomPushConstants {
+        float threshold;
+        float intensity;
+        float radius;
+        float padding;
+    } pushConstants{
+        .threshold = config_.bloomThreshold,
+        .intensity = config_.bloomIntensity,
+        .radius = config_.bloomRadius,
+        .padding = 0.0f
+    };
+    
+    vkCmdPushConstants(cmd, bloomPipelineLayout_, VK_SHADER_STAGE_FRAGMENT_BIT,
+                      0, sizeof(BloomPushConstants), &pushConstants);
+    
+    // Draw fullscreen triangle (3 vertices, no vertex buffer needed - generated in vertex shader)
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+    
+    // NOTE: Do NOT end the render pass here - let the caller continue rendering (e.g., ImGui)
+    // vkCmdEndRenderPass(cmd);
+    
+    // Transition scene image back to color attachment for next frame
+    // Actually, skip this since we'll do it at the beginning of next frame
+    /*
+    sceneBarrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    sceneBarrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    sceneBarrier.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    sceneBarrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    
+    vkCmdPipelineBarrier(cmd,
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        0, 0, nullptr, 0, nullptr, 1, &sceneBarrier);
+    */
 }
 
 void PostProcessManager::onResize(uint32_t width, uint32_t height) {

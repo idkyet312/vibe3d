@@ -122,6 +122,12 @@ bool ForwardPlusRenderer::initialize(GLFWwindow* window) {
         return false;
     }
     
+    // Setup post-processing framebuffers (needs depth and swapchain views)
+    if (!postProcessManager_->setupFramebuffers(depthImageView_, swapChain_->getImageViews())) {
+        std::cerr << "Failed to setup post-processing framebuffers" << std::endl;
+        return false;
+    }
+    
     if (!createSyncObjects()) {
         std::cerr << "Failed to create sync objects" << std::endl;
         return false;
@@ -1019,10 +1025,11 @@ void ForwardPlusRenderer::renderScene(const CameraUBO& camera, std::span<const P
     clearValues[0].color = {{0.02f, 0.02f, 0.04f, 1.0f}};
     clearValues[1].depthStencil = {1.0f, 0};
     
+    // Render scene to HDR offscreen buffer (PostProcessManager's scene render target)
     VkRenderPassBeginInfo renderPassInfo{
         .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
-        .renderPass = renderPass_,
-        .framebuffer = framebuffers_[imageIndex_],
+        .renderPass = postProcessManager_->getSceneRenderPass(),
+        .framebuffer = postProcessManager_->getSceneFramebuffer(imageIndex_),
         .renderArea = {
             .offset = {0, 0},
             .extent = swapChain_->getExtent()
@@ -1083,12 +1090,21 @@ void ForwardPlusRenderer::renderScene(const CameraUBO& camera, std::span<const P
     // Draw floor (6 indices starting at index 36)
     vkCmdDrawIndexed(cmd, 6, 1, 36, 0, 0);
     
-    // Render ImGui
-    if (imguiManager_) {
-        imguiManager_->endFrame(cmd);
-    }
-    
     vkCmdEndRenderPass(cmd);
+    
+    // Apply post-processing (bloom) and composite to swapchain
+    // This also handles ImGui rendering in the same pass
+    if (postProcessManager_ && postProcessManager_->isInitialized()) {
+        postProcessManager_->applyPostProcessing(cmd, depthImageView_, imageIndex_);
+        
+        // Render ImGui in the final render pass (bloom already opened the pass)
+        if (imguiManager_) {
+            imguiManager_->endFrame(cmd);
+        }
+        
+        // End the final render pass
+        vkCmdEndRenderPass(cmd);
+    }
     
     if (vkEndCommandBuffer(cmd) != VK_SUCCESS) {
         return;

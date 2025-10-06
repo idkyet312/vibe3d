@@ -52,8 +52,14 @@ public:
     bool isInitialized() const { return initialized_; }
     
     void onResize(uint32_t width, uint32_t height);
+    
+    // Setup framebuffers (called after swapchain creation/recreation)
+    bool setupFramebuffers(VkImageView depthView, const std::vector<VkImageView>& swapchainViews);
 
 private:
+    std::vector<char> readShaderFile(const std::string& filename);
+    VkShaderModule createShaderModule(const std::vector<char>& code);
+    
     bool createSceneRenderTarget();
     bool createSceneRenderPass();
     bool createSceneFramebuffers(VkImageView depthView);
