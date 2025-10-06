@@ -22,18 +22,25 @@ layout(set = 0, binding = 1) uniform ShadowUBO {
     vec4 cascadeBiasValues; // NEW: x=cascade0, y=cascade1, z=cascade2, w=cascade3
 } shadow;
 
-layout(set = 0, binding = 2) uniform sampler2D shadowMaps[4]; // 4 individual shadow maps for cascades
+layout(set = 0, binding = 2) uniform MaterialUBO {
+    vec3 albedo;
+    float roughness;
+    vec3 emissive;
+    float metallic;
+    float ambientStrength;
+    float lightIntensity;
+    float emissiveStrength;
+} material;
+
+layout(set = 0, binding = 3) uniform sampler2D shadowMaps[4]; // 4 individual shadow maps for cascades
 
 layout(push_constant) uniform PushConstants {
     mat4 model;
     int debugMode; // 0 = normal, 1 = show shadows, 2 = show cascades
+    int objectID;  // 0 = cube, 1 = floor
 } pushConstants;
 
 const float PI = 3.14159265359;
-
-// PBR material properties
-const float roughness = 0.5;
-const float metallic = 0.0;
 const vec3 F0_dielectric = vec3(0.04);
 
 // === Cook-Torrance GGX Functions ===
@@ -141,7 +148,35 @@ float calculateCascadedShadow(vec3 worldPos, vec3 N, vec3 L) {
 }
 
 void main() {
-    vec3 albedo = fragColor;
+    // Choose material properties based on object ID
+    vec3 albedo;
+    float roughness;
+    float metallic;
+    float ambientStrength;
+    float lightIntensity;
+    vec3 emissive;
+    float emissiveStrength;
+    
+    if (pushConstants.objectID == 0) {
+        // Cube: Use material properties from UBO (controlled by GUI)
+        albedo = material.albedo;
+        roughness = material.roughness;
+        metallic = material.metallic;
+        ambientStrength = material.ambientStrength;
+        lightIntensity = material.lightIntensity;
+        emissive = material.emissive;
+        emissiveStrength = material.emissiveStrength;
+    } else {
+        // Floor: Use fixed material properties (gray diffuse surface)
+        albedo = vec3(0.5, 0.5, 0.5);  // Gray
+        roughness = 0.8;                // Rough
+        metallic = 0.0;                 // Non-metallic
+        ambientStrength = 0.001;        // Low ambient
+        lightIntensity = 8.0;           // Same light intensity
+        emissive = vec3(0.0);           // No emission
+        emissiveStrength = 0.0;
+    }
+    
     vec3 N = normalize(fragNormal);
     vec3 V = normalize(camera.position.xyz - fragPos);
     
@@ -154,8 +189,8 @@ void main() {
     vec3 L = normalize(-shadow.lightDirection);
     vec3 H = normalize(V + L);
     
-    // VERY bright directional light for maximum contrast
-    vec3 radiance = vec3(8.0);
+    // Use light intensity
+    vec3 radiance = vec3(lightIntensity);
     
     float NDF = DistributionGGX(N, H, roughness);
     float G = GeometrySmith(N, V, L, roughness);
@@ -202,9 +237,13 @@ void main() {
     // Normal rendering with STRONG shadow contrast
     Lo += (diffuse + specular) * radiance * NdotL * shadowFactor;
     
-    // Almost NO ambient for maximum shadow visibility
-    vec3 ambient = vec3(0.001) * albedo;
-    vec3 color = ambient + Lo;
+    // Ambient lighting
+    vec3 ambient = vec3(ambientStrength) * albedo;
+    
+    // Add emissive component (self-illumination)
+    vec3 emissiveColor = emissive * emissiveStrength;
+    
+    vec3 color = ambient + Lo + emissiveColor;
     
     // HDR tonemapping
     color = color / (color + vec3(1.0));

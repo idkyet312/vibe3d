@@ -97,6 +97,17 @@ struct ModelUBO {
     alignas(16) glm::mat4 normalMatrix;
 };
 
+struct MaterialUBO {
+    alignas(16) glm::vec3 albedo; // RGB from controller
+    alignas(4) float roughness;
+    alignas(16) glm::vec3 emissive; // RGB emissive color
+    alignas(4) float metallic;
+    alignas(4) float ambientStrength;
+    alignas(4) float lightIntensity;
+    alignas(4) float emissiveStrength;
+    alignas(4) float padding;
+};
+
 // Forward+ specific structures
 struct PointLight {
     alignas(16) glm::vec3 position;
@@ -127,7 +138,8 @@ struct MaterialData {
 struct PushConstants {
     alignas(16) glm::mat4 model;
     alignas(4) int debugMode;  // 0 = normal, 1 = show shadows, 2 = show cascades
-    alignas(4) float padding[3];  // 3 floats for padding (12 bytes total, but each float is 4-byte aligned)
+    alignas(4) int objectID;   // 0 = cube, 1 = floor
+    alignas(4) float padding[2];  // 2 floats for padding
 };
 
 // Forward+ push constants for compute

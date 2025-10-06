@@ -3,7 +3,7 @@
   "depthBiasSlope": 1.627,
   "receiverBiasMultiplier": 0.159,
   "cascade0": 2.277,
-  "cascade1": 1.5,
+  "cascade1": 3.0,
   "cascade2": 3.0,
   "cascade3": 6.0
 }

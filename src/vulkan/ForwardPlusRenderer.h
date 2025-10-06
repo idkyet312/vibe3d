@@ -86,6 +86,7 @@ private:
     bool createShadowSampler();
     void calculateCascadeSplits();
     void updateShadowUBO();
+    void updateMaterialUBO();
     void renderShadowCascades(VkCommandBuffer cmd);
     glm::mat4 calculateLightSpaceMatrix(float nearPlane, float farPlane);
 
@@ -175,6 +176,7 @@ private:
     
     std::array<std::unique_ptr<VulkanBuffer>, MAX_FRAMES_IN_FLIGHT> cameraBuffers_;
     std::array<std::unique_ptr<VulkanBuffer>, MAX_FRAMES_IN_FLIGHT> shadowBuffers_;
+    std::array<std::unique_ptr<VulkanBuffer>, MAX_FRAMES_IN_FLIGHT> materialBuffers_;
     std::unique_ptr<VulkanBuffer> lightBuffer_;
     std::unique_ptr<VulkanBuffer> lightGridBuffer_;
     std::unique_ptr<VulkanBuffer> visibleLightIndicesBuffer_;
@@ -204,13 +206,31 @@ private:
         float depthBiasSlope = 1.627f;
         float receiverBiasMultiplier = 0.159f;
         float cascade0 = 2.277f;
-        float cascade1 = 1.5f;
+        float cascade1 = 3.0f;
         float cascade2 = 3.0f;
         float cascade3 = 6.0f;
     } shadowBiasConfig_;
     
     // Helper to load shadow bias from JSON file
     void loadShadowBiasConfig();
+    
+    // Material configuration (loaded from JSON)
+    struct MaterialConfig {
+        float roughness = 0.5f;
+        float metallic = 0.0f;
+        float albedoR = 0.8f;
+        float albedoG = 0.3f;
+        float albedoB = 0.2f;
+        float ambientStrength = 0.001f;
+        float lightIntensity = 8.0f;
+        float emissiveR = 0.0f;
+        float emissiveG = 0.0f;
+        float emissiveB = 0.0f;
+        float emissiveStrength = 0.0f;
+    } materialConfig_;
+    
+    // Helper to load material config from JSON file
+    void loadMaterialConfig();
     
     // Debug mode
     int shadowDebugMode_ = 0;  // 0 = normal, 1 = show shadows, 2 = show cascades  // NEW

@@ -336,18 +336,28 @@ bool ForwardPlusRenderer::createDescriptorSetLayouts() {
         .pImmutableSamplers = nullptr
     };
     
-    // Shadow map sampler binding 2
-    VkDescriptorSetLayoutBinding shadowMapBinding{
+    // Material UBO descriptor layout binding 2
+    VkDescriptorSetLayoutBinding materialUboLayoutBinding{
         .binding = 2,
+        .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+        .descriptorCount = 1,
+        .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+        .pImmutableSamplers = nullptr
+    };
+    
+    // Shadow map sampler binding 3 (changed from 2)
+    VkDescriptorSetLayoutBinding shadowMapBinding{
+        .binding = 3,
         .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
         .descriptorCount = static_cast<uint32_t>(NUM_CASCADES),
         .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
         .pImmutableSamplers = nullptr
     };
 
-    std::array<VkDescriptorSetLayoutBinding, 3> bindings = {
+    std::array<VkDescriptorSetLayoutBinding, 4> bindings = {
         uboLayoutBinding, 
-        shadowUboLayoutBinding, 
+        shadowUboLayoutBinding,
+        materialUboLayoutBinding,
         shadowMapBinding
     };
 
@@ -377,6 +387,14 @@ bool ForwardPlusRenderer::createBuffers() {
                                        VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | 
                                        VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
+            return false;
+        }
+        
+        materialBuffers_[i] = std::make_unique<VulkanBuffer>();
+        if (!materialBuffers_[i]->create(*device_, sizeof(MaterialUBO),
+                                         VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | 
+                                         VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
             return false;
         }
     }
@@ -416,6 +434,12 @@ bool ForwardPlusRenderer::createBuffers() {
             .range = sizeof(ShadowUBO)
         };
         
+        VkDescriptorBufferInfo materialBufferInfo{
+            .buffer = materialBuffers_[i]->getBuffer(),
+            .offset = 0,
+            .range = sizeof(MaterialUBO)
+        };
+        
         // Shadow map image infos
         std::array<VkDescriptorImageInfo, NUM_CASCADES> shadowImageInfos;
         for (size_t j = 0; j < NUM_CASCADES; ++j) {
@@ -426,7 +450,7 @@ bool ForwardPlusRenderer::createBuffers() {
             };
         }
         
-        std::array<VkWriteDescriptorSet, 3> descriptorWrites{};
+        std::array<VkWriteDescriptorSet, 4> descriptorWrites{};
         
         descriptorWrites[0] = {
             .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
@@ -452,6 +476,16 @@ bool ForwardPlusRenderer::createBuffers() {
             .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
             .dstSet = globalDescriptorSets_[i],
             .dstBinding = 2,
+            .dstArrayElement = 0,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            .pBufferInfo = &materialBufferInfo
+        };
+        
+        descriptorWrites[3] = {
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = globalDescriptorSets_[i],
+            .dstBinding = 3,
             .dstArrayElement = 0,
             .descriptorCount = static_cast<uint32_t>(NUM_CASCADES),
             .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
@@ -888,6 +922,9 @@ void ForwardPlusRenderer::renderScene(const CameraUBO& camera, std::span<const P
     // Update shadow UBO
     updateShadowUBO();
     
+    // Update material UBO
+    updateMaterialUBO();
+    
     VkCommandBuffer cmd = commandBuffers_[currentFrame_];
     
     vkResetCommandBuffer(cmd, 0);
@@ -949,7 +986,8 @@ void ForwardPlusRenderer::renderScene(const CameraUBO& camera, std::span<const P
     PushConstants pushConst{
         .model = cubeModel,
         .debugMode = shadowDebugMode_,
-        .padding = {0.0f, 0.0f, 0.0f}
+        .objectID = 0,  // 0 = cube
+        .padding = {0.0f, 0.0f}
     };
     vkCmdPushConstants(cmd, forwardPipelineLayout_, 
                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 
@@ -963,6 +1001,7 @@ void ForwardPlusRenderer::renderScene(const CameraUBO& camera, std::span<const P
     
     // Push model matrix and debug mode for floor
     pushConst.model = floorModel;
+    pushConst.objectID = 1;  // 1 = floor
     vkCmdPushConstants(cmd, forwardPipelineLayout_, 
                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 
                       0, sizeof(PushConstants), &pushConst);
@@ -1250,6 +1289,24 @@ void ForwardPlusRenderer::updateShadowUBO() {
     shadowBuffers_[currentFrame_]->copyFrom(&shadowUBO, sizeof(ShadowUBO));
 }
 
+void ForwardPlusRenderer::updateMaterialUBO() {
+    // Load material config from JSON file (updated by GUI)
+    loadMaterialConfig();
+    
+    MaterialUBO materialUBO{};
+    
+    // Set material properties from config
+    materialUBO.albedo = glm::vec3(materialConfig_.albedoR, materialConfig_.albedoG, materialConfig_.albedoB);
+    materialUBO.roughness = materialConfig_.roughness;
+    materialUBO.emissive = glm::vec3(materialConfig_.emissiveR, materialConfig_.emissiveG, materialConfig_.emissiveB);
+    materialUBO.metallic = materialConfig_.metallic;
+    materialUBO.ambientStrength = materialConfig_.ambientStrength;
+    materialUBO.lightIntensity = materialConfig_.lightIntensity;
+    materialUBO.emissiveStrength = materialConfig_.emissiveStrength;
+    
+    materialBuffers_[currentFrame_]->copyFrom(&materialUBO, sizeof(MaterialUBO));
+}
+
 void ForwardPlusRenderer::renderShadowCascades(VkCommandBuffer cmd) {
     // Load shadow bias config from JSON file (updated by GUI)
     loadShadowBiasConfig();
@@ -1398,6 +1455,58 @@ void ForwardPlusRenderer::loadShadowBiasConfig() {
         }
     } catch (const std::exception& e) {
         std::cout << "Using default shadow bias config (config file not found or invalid)" << std::endl;
+    }
+}
+
+void ForwardPlusRenderer::loadMaterialConfig() {
+    try {
+        std::ifstream configFile("material_config.json");
+        if (configFile.is_open()) {
+            json config;
+            configFile >> config;
+            
+            // Load values from JSON
+            if (config.contains("roughness")) {
+                materialConfig_.roughness = config["roughness"].get<float>();
+            }
+            if (config.contains("metallic")) {
+                materialConfig_.metallic = config["metallic"].get<float>();
+            }
+            if (config.contains("albedoR")) {
+                materialConfig_.albedoR = config["albedoR"].get<float>();
+            }
+            if (config.contains("albedoG")) {
+                materialConfig_.albedoG = config["albedoG"].get<float>();
+            }
+            if (config.contains("albedoB")) {
+                materialConfig_.albedoB = config["albedoB"].get<float>();
+            }
+            if (config.contains("ambientStrength")) {
+                materialConfig_.ambientStrength = config["ambientStrength"].get<float>();
+            }
+            if (config.contains("lightIntensity")) {
+                materialConfig_.lightIntensity = config["lightIntensity"].get<float>();
+            }
+            if (config.contains("emissiveR")) {
+                materialConfig_.emissiveR = config["emissiveR"].get<float>();
+            }
+            if (config.contains("emissiveG")) {
+                materialConfig_.emissiveG = config["emissiveG"].get<float>();
+            }
+            if (config.contains("emissiveB")) {
+                materialConfig_.emissiveB = config["emissiveB"].get<float>();
+            }
+            if (config.contains("emissiveStrength")) {
+                materialConfig_.emissiveStrength = config["emissiveStrength"].get<float>();
+            }
+            
+            std::cout << "Loaded material config: roughness=" << materialConfig_.roughness 
+                      << ", metallic=" << materialConfig_.metallic 
+                      << ", albedo=(" << materialConfig_.albedoR << "," 
+                      << materialConfig_.albedoG << "," << materialConfig_.albedoB << ")" << std::endl;
+        }
+    } catch (const std::exception& e) {
+        std::cout << "Using default material config (config file not found or invalid)" << std::endl;
     }
 }
 
