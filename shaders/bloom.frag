@@ -79,7 +79,7 @@ vec3 gaussianBlur(sampler2D tex, vec2 uv, float radius) {
 vec3 bloom(sampler2D tex, vec2 uv) {
     vec3 color = texture(tex, uv).rgb;
     
-    // Extract bright areas with aggressive amplification
+    // Extract bright areas - this preserves the COLOR of the emissive
     vec3 bright = extractBrightAreas(color);
     
     // VERY tight glow - minimal environmental spread
@@ -90,9 +90,19 @@ vec3 bloom(sampler2D tex, vec2 uv) {
     // This keeps glow on objects, minimal environmental light
     vec3 combinedBloom = bloom1 * 0.95 + bloom2 * 0.05;
     
-    // Moderate final amplification (reduced from 4.0 to limit environmental bleed)
-    // The object itself is bright from the aggressive extractBrightAreas amplification
-    return extractBrightAreas(combinedBloom) * 2.0;
+    // Extract bright areas from bloom to amplify the glow
+    // BUT preserve the color ratios better
+    vec3 bloomBright = extractBrightAreas(combinedBloom);
+    
+    // Calculate color direction (hue/saturation) from the bloom
+    float bloomLuminance = max(bloomBright.r, max(bloomBright.g, bloomBright.b));
+    vec3 colorDirection = vec3(1.0);
+    if (bloomLuminance > 0.001) {
+        colorDirection = bloomBright / bloomLuminance;  // Normalize to preserve color
+    }
+    
+    // Amplify while preserving color
+    return colorDirection * bloomLuminance * 2.0;
 }
 
 void main() {
@@ -121,9 +131,9 @@ void main() {
     vec3 mapped = (finalColor * (a * finalColor + b)) / (finalColor * (c * finalColor + d) + e);
     finalColor = clamp(mapped, 0.0, 1.0);
     
-    // Slight saturation boost for more vibrant glow
+    // Boost saturation to keep emissive colors vibrant
     float luminance = dot(finalColor, vec3(0.2126, 0.7152, 0.0722));
-    finalColor = mix(vec3(luminance), finalColor, 1.05);
+    finalColor = mix(vec3(luminance), finalColor, 1.15);  // Increased from 1.05 to enhance color
     
     outColor = vec4(finalColor, 1.0);
 }

@@ -45,3 +45,6 @@ Makefile
 
 # Debug files
 *.dSYM/
+
+# User-specific config files
+vibe3d_presets.json
