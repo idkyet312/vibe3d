@@ -44,6 +44,7 @@ public:
     // Render the material control panel and return current values
     MaterialControls& getMaterialControls() { return controls_; }
     void renderMaterialPanel();
+    void renderFPSCounter();
     
     // Handle window resize
     void onWindowResize();

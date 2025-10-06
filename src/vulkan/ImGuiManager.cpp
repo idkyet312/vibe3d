@@ -177,6 +177,31 @@ void ImGuiManager::renderMaterialPanel() {
     ImGui::End();
 }
 
+void ImGuiManager::renderFPSCounter() {
+    // Get the IO object for FPS calculation
+    ImGuiIO& io = ImGui::GetIO();
+    
+    // Create a small window in the top right corner
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 120, 10), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(110, 50), ImGuiCond_Always);
+    
+    // Window with no title bar, no resize, no move, semi-transparent background
+    ImGui::Begin("##FPS", nullptr, 
+                 ImGuiWindowFlags_NoTitleBar | 
+                 ImGuiWindowFlags_NoResize | 
+                 ImGuiWindowFlags_NoMove | 
+                 ImGuiWindowFlags_NoScrollbar | 
+                 ImGuiWindowFlags_NoSavedSettings |
+                 ImGuiWindowFlags_NoFocusOnAppearing |
+                 ImGuiWindowFlags_NoNav);
+    
+    // Display FPS with larger font
+    ImGui::Text("FPS: %.1f", io.Framerate);
+    ImGui::Text("%.2f ms", 1000.0f / io.Framerate);
+    
+    ImGui::End();
+}
+
 void ImGuiManager::applyPreset(int presetIndex) {
     if (presetIndex < 0 || presetIndex >= std::size(PRESETS)) return;
     

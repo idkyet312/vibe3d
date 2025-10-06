@@ -932,6 +932,7 @@ void ForwardPlusRenderer::renderScene(const CameraUBO& camera, std::span<const P
     if (imguiManager_) {
         imguiManager_->beginFrame();
         imguiManager_->renderMaterialPanel();
+        imguiManager_->renderFPSCounter();
         
         // Apply ImGui material values to materialConfig_
         auto& controls = imguiManager_->getMaterialControls();
