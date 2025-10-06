@@ -335,42 +335,43 @@ void ImGuiManager::loadConfig(int slot) {
 
 void ImGuiManager::saveConfigsToDisk() {
     try {
-        json j;
+        json j = json::object();
+        j["configs"] = json::array();
         
         // Save all 3 config slots
         for (int i = 0; i < 3; i++) {
-            if (!savedConfigs_[i].hasData) continue;
+            json slot = json::object();
+            slot["hasData"] = savedConfigs_[i].hasData;
             
-            json slot;
-            slot["hasData"] = true;
+            if (savedConfigs_[i].hasData) {
+                // Material settings
+                auto& mat = savedConfigs_[i].material;
+                slot["material"] = {
+                    {"albedoR", mat.albedoR},
+                    {"albedoG", mat.albedoG},
+                    {"albedoB", mat.albedoB},
+                    {"roughness", mat.roughness},
+                    {"metallic", mat.metallic},
+                    {"ambientStrength", mat.ambientStrength},
+                    {"lightIntensity", mat.lightIntensity},
+                    {"lightYaw", mat.lightYaw},
+                    {"lightPitch", mat.lightPitch},
+                    {"emissiveR", mat.emissiveR},
+                    {"emissiveG", mat.emissiveG},
+                    {"emissiveB", mat.emissiveB},
+                    {"emissiveStrength", mat.emissiveStrength}
+                };
+                
+                // Bloom settings
+                auto& bloom = savedConfigs_[i].bloom;
+                slot["bloom"] = {
+                    {"enabled", bloom.enabled},
+                    {"strength", bloom.strength},
+                    {"threshold", bloom.threshold}
+                };
+            }
             
-            // Material settings
-            auto& mat = savedConfigs_[i].material;
-            slot["material"] = {
-                {"albedoR", mat.albedoR},
-                {"albedoG", mat.albedoG},
-                {"albedoB", mat.albedoB},
-                {"roughness", mat.roughness},
-                {"metallic", mat.metallic},
-                {"ambientStrength", mat.ambientStrength},
-                {"lightIntensity", mat.lightIntensity},
-                {"lightYaw", mat.lightYaw},
-                {"lightPitch", mat.lightPitch},
-                {"emissiveR", mat.emissiveR},
-                {"emissiveG", mat.emissiveG},
-                {"emissiveB", mat.emissiveB},
-                {"emissiveStrength", mat.emissiveStrength}
-            };
-            
-            // Bloom settings
-            auto& bloom = savedConfigs_[i].bloom;
-            slot["bloom"] = {
-                {"enabled", bloom.enabled},
-                {"strength", bloom.strength},
-                {"threshold", bloom.threshold}
-            };
-            
-            j["configs"][i] = slot;
+            j["configs"].push_back(slot);
         }
         
         // Write to file
@@ -398,13 +399,15 @@ void ImGuiManager::loadConfigsFromDisk() {
         file.close();
         
         // Load all 3 config slots
-        if (j.contains("configs")) {
-            for (int i = 0; i < 3; i++) {
-                std::string slotKey = std::to_string(i);
-                if (!j["configs"].contains(slotKey)) continue;
+        if (j.contains("configs") && j["configs"].is_array()) {
+            auto& configs = j["configs"];
+            for (int i = 0; i < 3 && i < configs.size(); i++) {
+                auto& slot = configs[i];
                 
-                auto& slot = j["configs"][slotKey];
-                if (!slot["hasData"].get<bool>()) continue;
+                if (!slot.contains("hasData") || !slot["hasData"].get<bool>()) {
+                    savedConfigs_[i].hasData = false;
+                    continue;
+                }
                 
                 // Load material settings
                 if (slot.contains("material")) {

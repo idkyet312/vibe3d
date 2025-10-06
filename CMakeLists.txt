@@ -11,6 +11,7 @@ find_package(glfw3 REQUIRED)
 find_package(glm REQUIRED)
 find_package(glad CONFIG REQUIRED)
 find_package(imgui CONFIG REQUIRED)
+find_package(nlohmann_json CONFIG REQUIRED)
 
 # Try to find Vulkan (optional)
 find_package(Vulkan)
@@ -61,6 +62,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     glm::glm
     glad::glad
     imgui::imgui
+    nlohmann_json::nlohmann_json
 )
 
 # Add Vulkan support if available
