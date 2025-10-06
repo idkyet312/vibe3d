@@ -130,8 +130,9 @@ float calculateShadowPCF(vec4 fragPosLight, int cascadeIndex, float bias) {
 float calculateCascadedShadow(vec3 N, vec3 L) {
     int cascadeIndex = selectCascadeIndex();
     
-    // Very small bias for maximum shadow visibility
-    float bias = max(0.0005 * (1.0 - dot(N, L)), 0.0001);
+    // MUCH higher bias to completely eliminate self-shadowing
+    // The bias scales with the angle between surface normal and light direction
+    float bias = max(0.1 * (1.0 - dot(N, L)), 0.01);
     
     return calculateShadowPCF(fragPosLightSpace[cascadeIndex], cascadeIndex, bias);
 }
