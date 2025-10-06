@@ -20,6 +20,8 @@ InputManager::InputManager()
     , shadowDebugKeyPressed(false)
     , cameraFreezeKeyPressed(false)
     , cameraFrozen(false)
+    , fpsModeKeyPressed(false)
+    , fpsMode(false)
 {
     instance = this;
 }
@@ -46,14 +48,36 @@ glm::vec3 InputManager::getCameraMovement(GLFWwindow* window, float deltaTime) c
     glm::vec3 movement(0.0f);
     float speed = cameraSpeed * deltaTime;
     
-    if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
-        movement += speed * cameraFront;
-    if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
-        movement -= speed * cameraFront;
-    if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
-        movement -= glm::normalize(glm::cross(cameraFront, cameraUp)) * speed;
-    if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
-        movement += glm::normalize(glm::cross(cameraFront, cameraUp)) * speed;
+    if (fpsMode) {
+        // FPS mode: WASD moves in the horizontal plane
+        glm::vec3 forward = glm::normalize(glm::vec3(cameraFront.x, 0.0f, cameraFront.z));
+        glm::vec3 right = glm::normalize(glm::cross(forward, cameraUp));
+        
+        if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
+            movement += speed * forward;
+        if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
+            movement -= speed * forward;
+        if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
+            movement -= right * speed;
+        if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
+            movement += right * speed;
+        
+        // Q/E for vertical movement in FPS mode
+        if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS)
+            movement.y -= speed;
+        if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS)
+            movement.y += speed;
+    } else {
+        // Original orbital camera mode
+        if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
+            movement += speed * cameraFront;
+        if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
+            movement -= speed * cameraFront;
+        if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
+            movement -= glm::normalize(glm::cross(cameraFront, cameraUp)) * speed;
+        if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
+            movement += glm::normalize(glm::cross(cameraFront, cameraUp)) * speed;
+    }
         
     return movement;
 }
@@ -126,6 +150,21 @@ bool InputManager::shouldToggleCameraFreeze(GLFWwindow* window) {
     }
     if (glfwGetKey(window, GLFW_KEY_TAB) == GLFW_RELEASE) {
         cameraFreezeKeyPressed = false;
+    }
+    return false;
+}
+
+bool InputManager::shouldToggleFPSMode(GLFWwindow* window) {
+    if (glfwGetKey(window, GLFW_KEY_F) == GLFW_PRESS && !fpsModeKeyPressed) {
+        fpsModeKeyPressed = true;
+        fpsMode = !fpsMode;
+        std::cout << "[INPUT] Camera mode: " << (fpsMode ? "FPS (First Person)" : "ORBITAL") 
+                  << " - Use F to toggle, WASD to move" 
+                  << (fpsMode ? ", Q/E for up/down" : "") << std::endl;
+        return true;
+    }
+    if (glfwGetKey(window, GLFW_KEY_F) == GLFW_RELEASE) {
+        fpsModeKeyPressed = false;
     }
     return false;
 }

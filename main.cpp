@@ -142,6 +142,13 @@ int main() {
     int frameCount = 0;
     glm::vec3 cameraPos(6.0f, 3.0f, 0.0f);  // Position camera at right angle to the cube
     glm::vec3 mainObjPos(0, 2, 0);
+    
+    // FPS camera physics
+    float cameraVelocityY = 0.0f;
+    const float gravity = -15.0f;  // Gravity acceleration
+    const float groundHeight = 1.5f;  // Camera height above ground (eye level)
+    const float jumpVelocity = 7.0f;  // Initial jump velocity
+    bool isOnGround = false;
 
     // Main loop
     while (!glfwWindowShouldClose(window)) {
@@ -166,6 +173,9 @@ int main() {
 
         // Check for camera freeze toggle (TAB key)
         input->shouldToggleCameraFreeze(window);
+        
+        // Check for FPS mode toggle (F key)
+        input->shouldToggleFPSMode(window);
 
         // Check for shadow debug toggle (B key) - Vulkan only
         if (useVulkan && vulkanRenderer) {
@@ -176,6 +186,33 @@ int main() {
         }
 
         cameraPos += input->getCameraMovement(window, deltaTime);
+        
+        // Apply FPS camera physics (gravity and ground collision)
+        if (input->isFPSMode()) {
+            // Apply gravity
+            cameraVelocityY += gravity * deltaTime;
+            cameraPos.y += cameraVelocityY * deltaTime;
+            
+            // Ground collision
+            if (cameraPos.y <= groundHeight) {
+                cameraPos.y = groundHeight;
+                cameraVelocityY = 0.0f;
+                isOnGround = true;
+                
+                // Jump with Space key
+                if (input->shouldJump(window)) {
+                    cameraVelocityY = jumpVelocity;
+                    isOnGround = false;
+                }
+            } else {
+                isOnGround = false;
+            }
+        } else {
+            // In orbital mode, reset vertical velocity
+            cameraVelocityY = 0.0f;
+            isOnGround = false;
+        }
+        
         physics->updatePhysics(deltaTime);
         physics->updateMainObject(mainObjPos, deltaTime);
 

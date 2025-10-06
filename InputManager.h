@@ -35,6 +35,10 @@ public:
     bool isCameraFrozen() const { return cameraFrozen; }
     void setCursorMode(GLFWwindow* window);
     
+    // FPS camera mode toggle
+    bool shouldToggleFPSMode(GLFWwindow* window);
+    bool isFPSMode() const { return fpsMode; }
+    
     // Mouse handling
     void handleMouseMovement(double xpos, double ypos);
     glm::vec3 getCameraFront() const { return cameraFront; }
@@ -58,6 +62,8 @@ private:
     bool shadowDebugKeyPressed;
     bool cameraFreezeKeyPressed;
     bool cameraFrozen;
+    bool fpsModeKeyPressed;
+    bool fpsMode;
     
     // Chained callback for ImGui compatibility
     static GLFWcursorposfun imguiCursorPosCallback;

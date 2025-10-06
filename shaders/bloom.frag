@@ -18,24 +18,25 @@ vec3 bloom(sampler2D tex, vec2 uv, float radius) {
     float totalWeight = 0.0;
     
     // Multi-pass sampling with varying radii for better glow spread
-    const int passes = 3;
+    const int passes = 2;
     for(int pass = 0; pass < passes; pass++) {
-        float currentRadius = radius * (1.0 + float(pass) * 0.5);
-        float stepSize = max(1.0, currentRadius / 4.0);
+        float currentRadius = radius * (1.0 + float(pass) * 0.4);
+        float stepSize = max(1.0, currentRadius / 3.0);
         
         for(float x = -currentRadius; x <= currentRadius; x += stepSize) {
             for(float y = -currentRadius; y <= currentRadius; y += stepSize) {
                 vec2 offset = vec2(x, y) * texelSize;
                 vec3 sampleColor = texture(tex, uv + offset).rgb;
                 
-                // Enhanced brightness extraction with softer falloff
+                // More aggressive brightness extraction - only very bright areas
                 float brightness = dot(sampleColor, vec3(0.2126, 0.7152, 0.0722));
                 float brightnessFactor = brightness / (params.threshold + 0.001);
-                float contribution = smoothstep(0.8, 1.5, brightnessFactor);
+                // Stricter threshold - only affects truly bright areas
+                float contribution = smoothstep(1.2, 2.0, brightnessFactor);
                 
                 // Distance-based weight with smoother falloff
                 float dist = length(vec2(x, y)) / currentRadius;
-                float weight = exp(-dist * dist * 2.0) * (1.0 / float(pass + 1));
+                float weight = exp(-dist * dist * 2.5) * (1.0 / float(pass + 1));
                 
                 result += sampleColor * contribution * weight;
                 totalWeight += weight * contribution;
@@ -47,8 +48,8 @@ vec3 bloom(sampler2D tex, vec2 uv, float radius) {
         result /= totalWeight;
     }
     
-    // Boost the bloom intensity with non-linear scaling
-    result = pow(result, vec3(0.9)) * params.intensity * 2.5;
+    // More moderate intensity boost
+    result = pow(result, vec3(0.95)) * params.intensity * 1.8;
     
     return result;
 }
