@@ -39,7 +39,7 @@ class MaterialController(QMainWindow):
         
     def init_ui(self):
         self.setWindowTitle("Vibe3D Material Controller")
-        self.setGeometry(100, 100, 400, 450)
+        self.setGeometry(100, 100, 400, 550)
         
         # Main widget and layout
         main_widget = QWidget()
@@ -89,6 +89,20 @@ class MaterialController(QMainWindow):
         
         material_group.setLayout(material_layout)
         layout.addWidget(material_group)
+        
+        # Lighting group
+        lighting_group = QGroupBox("Lighting")
+        lighting_layout = QVBoxLayout()
+        
+        self.ambient_slider, self.ambient_spin = self.create_slider_row(
+            "Skylight (Ambient):", 0.0, 0.1, 0.001, lighting_layout
+        )
+        self.light_intensity_slider, self.light_intensity_spin = self.create_slider_row(
+            "Sun Intensity:", 0.0, 20.0, 8.0, lighting_layout
+        )
+        
+        lighting_group.setLayout(lighting_layout)
+        layout.addWidget(lighting_group)
         
         # Control buttons
         button_layout = QHBoxLayout()
@@ -147,6 +161,8 @@ class MaterialController(QMainWindow):
         self.material_values["albedoB"] = self.albedo_b_spin.value()
         self.material_values["roughness"] = self.roughness_spin.value()
         self.material_values["metallic"] = self.metallic_spin.value()
+        self.material_values["ambientStrength"] = self.ambient_spin.value()
+        self.material_values["lightIntensity"] = self.light_intensity_spin.value()
         
         self.update_color_preview()
         self.status_label.setText("Material changed - will auto-save...")
@@ -197,6 +213,8 @@ class MaterialController(QMainWindow):
         self.albedo_b_spin.setValue(self.material_values["albedoB"])
         self.roughness_spin.setValue(self.material_values["roughness"])
         self.metallic_spin.setValue(self.material_values["metallic"])
+        self.ambient_spin.setValue(self.material_values["ambientStrength"])
+        self.light_intensity_spin.setValue(self.material_values["lightIntensity"])
         self.update_color_preview()
     
     def reset_to_defaults(self):
