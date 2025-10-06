@@ -11,31 +11,40 @@ layout(push_constant) uniform BloomParams {
     float radius;
 } params;
 
-// Extract bright pixels with smooth falloff (like Unity/Unreal bright pass)
+// Extract bright pixels with aggressive amplification
 vec3 extractBrightAreas(vec3 color) {
     float brightness = max(color.r, max(color.g, color.b));
     
-    // Smooth threshold transition instead of hard cutoff
+    // Smooth threshold transition
     float softThreshold = smoothstep(params.threshold * 0.5, params.threshold, brightness);
     
-    // Preserve color while extracting bright areas
-    return color * softThreshold * softThreshold;
+    // VERY AGGRESSIVE amplification - makes objects bright FAST with low emissive values
+    // Exponential scaling for rapid brightness increase
+    float amplification = 1.0 + pow((brightness - params.threshold) * 5.0, 2.0);
+    amplification = max(amplification, 1.0);
+    
+    // Preserve color while extracting and amplifying bright areas
+    return color * softThreshold * softThreshold * amplification;
 }
 
-// 13-tap blur for smoother, more realistic glow
+// Blur with quadratic (inverse square) falloff like real light
 vec3 gaussianBlur(sampler2D tex, vec2 uv, float radius) {
     vec2 texelSize = 1.0 / textureSize(tex, 0);
     vec3 result = vec3(0.0);
     float totalWeight = 0.0;
     
-    // Gaussian-style sampling pattern with proper weights
+    // Sample pattern with quadratic distance falloff
     const int samples = 9;
     const float offsets[9] = float[](0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0);
-    const float weights[9] = float[](0.16, 0.15, 0.13, 0.11, 0.09, 0.07, 0.05, 0.03, 0.01);
     
     for(int i = 0; i < samples; i++) {
         float offset = offsets[i] * radius;
-        float weight = weights[i];
+        
+        // QUADRATIC FALLOFF: 1 / (1 + distance^2)
+        // This mimics real light intensity falloff (inverse square law)
+        float distance = float(i) + 1.0; // +1 to avoid division by zero at center
+        float quadraticFalloff = 1.0 / (1.0 + distance * distance);
+        float weight = quadraticFalloff;
         
         // Sample in 4 directions (up, down, left, right)
         result += texture(tex, uv + vec2(offset, 0.0) * texelSize).rgb * weight;
@@ -46,10 +55,14 @@ vec3 gaussianBlur(sampler2D tex, vec2 uv, float radius) {
         totalWeight += weight * 4.0;
     }
     
-    // Diagonal samples for rounder glow
+    // Diagonal samples with quadratic falloff
     for(int i = 1; i < 5; i++) {
-        float offset = float(i) * radius * 0.7;
-        float weight = weights[i] * 0.5;
+        float offset = float(i) * radius * 0.6;
+        
+        // QUADRATIC FALLOFF for diagonals (sqrt(2) times further)
+        float distance = float(i) * 1.414; // diagonal distance
+        float quadraticFalloff = 1.0 / (1.0 + distance * distance);
+        float weight = quadraticFalloff * 0.5; // Reduced influence for diagonals
         
         result += texture(tex, uv + vec2(offset, offset) * texelSize).rgb * weight;
         result += texture(tex, uv + vec2(-offset, offset) * texelSize).rgb * weight;
@@ -62,22 +75,23 @@ vec3 gaussianBlur(sampler2D tex, vec2 uv, float radius) {
     return result / totalWeight;
 }
 
-// Multi-pass downsampled bloom for performance and quality
+// Multi-pass bloom with minimal environmental spread
 vec3 bloom(sampler2D tex, vec2 uv) {
     vec3 color = texture(tex, uv).rgb;
     
-    // Extract bright areas with soft threshold
+    // Extract bright areas with aggressive amplification
     vec3 bright = extractBrightAreas(color);
     
-    // Multiple blur passes at different scales for realistic glow spread
-    vec3 bloom1 = gaussianBlur(tex, uv, params.radius * 0.5);  // Tight glow
-    vec3 bloom2 = gaussianBlur(tex, uv, params.radius * 1.0);  // Medium glow
-    vec3 bloom3 = gaussianBlur(tex, uv, params.radius * 2.0);  // Wide glow
+    // VERY tight glow - minimal environmental spread
+    vec3 bloom1 = gaussianBlur(tex, uv, params.radius * 0.2);  // Ultra tight
+    vec3 bloom2 = gaussianBlur(tex, uv, params.radius * 0.4);  // Tight
     
-    // Combine different blur sizes for natural falloff
-    vec3 combinedBloom = bloom1 * 0.5 + bloom2 * 0.3 + bloom3 * 0.2;
+    // Almost entirely from ultra-tight bloom (95% ultra-tight, 5% tight)
+    // This keeps glow on objects, minimal environmental light
+    vec3 combinedBloom = bloom1 * 0.95 + bloom2 * 0.05;
     
-    // Extract bright areas from combined bloom
+    // Moderate final amplification (reduced from 4.0 to limit environmental bleed)
+    // The object itself is bright from the aggressive extractBrightAreas amplification
     return extractBrightAreas(combinedBloom) * 2.0;
 }
 
@@ -85,8 +99,18 @@ void main() {
     vec3 sceneColor = texture(sceneTexture, inUV).rgb;
     vec3 bloomColor = bloom(sceneTexture, inUV);
     
-    // Additive blending with intensity control
-    vec3 finalColor = sceneColor + bloomColor * params.intensity;
+    // Make the object MUCH brighter than its glow
+    // Amplify the base bright areas significantly more than the bloom spread
+    float brightness = max(sceneColor.r, max(sceneColor.g, sceneColor.b));
+    float objectBoost = 1.0;
+    if (brightness > params.threshold) {
+        // Objects above threshold get MASSIVE brightness boost
+        float excess = (brightness - params.threshold) * 8.0;
+        objectBoost = 1.0 + pow(excess, 2.0);
+    }
+    
+    // Apply boost to base color, add dimmer bloom glow
+    vec3 finalColor = sceneColor * objectBoost + bloomColor * params.intensity * 0.3;
     
     // ACES Filmic tonemapping (keeps colors vibrant in HDR)
     const float a = 2.51;

@@ -34,13 +34,13 @@ public:
         float roughness = 0.5f;
         float metallic = 0.0f;
         float ambientStrength = 0.001f;
-        float lightIntensity = 8.0f;
+        float lightIntensity = 0.1f;  // Updated to current level (was 0.4)
         float lightYaw = 225.0f;
         float lightPitch = 45.0f;
-        float emissiveR = 0.0f;
+        float emissiveR = 0.549f;  // Red emissive color
         float emissiveG = 0.0f;
         float emissiveB = 0.0f;
-        float emissiveStrength = 0.0f;
+        float emissiveStrength = 0.1f;  // Default emissive strength
         int currentPreset = 0;  // 0 = Custom
         bool valuesChanged = false;
     };
@@ -53,13 +53,19 @@ public:
     // Bloom controls
     struct BloomControls {
         bool enabled = true;
-        float strength = 0.15f;  // Increased for more visible bloom
-        float threshold = 1.0f;
+        float strength = 0.5f;    // Realistic bloom intensity
+        float threshold = 0.15f;  // Lower threshold to catch more emissive areas
         bool valuesChanged = false;
     };
     
     BloomControls& getBloomControls() { return bloomControls_; }
     void renderBloomPanel();
+    
+    // Config save/load (persists to disk)
+    void saveConfig(int slot); // slot 0-2
+    void loadConfig(int slot);
+    void saveConfigsToDisk();  // Save all configs to file
+    void loadConfigsFromDisk(); // Load all configs from file
     
     // Handle window resize
     void onWindowResize();
@@ -69,6 +75,14 @@ private:
     bool initialized_ = false;
     MaterialControls controls_;
     BloomControls bloomControls_;
+    
+    // Saved config slots
+    struct SavedConfig {
+        MaterialControls material;
+        BloomControls bloom;
+        bool hasData = false;
+    };
+    SavedConfig savedConfigs_[3];  // 3 save slots
     
     // Preset definitions
     struct Preset {

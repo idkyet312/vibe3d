@@ -5,6 +5,10 @@
 #include <GLFW/glfw3.h>
 #include <stdexcept>
 #include <iostream>
+#include <fstream>
+#include <nlohmann/json.hpp>
+
+using json = nlohmann::json;
 
 namespace vibe::vk {
 
@@ -77,12 +81,19 @@ bool ImGuiManager::initialize(GLFWwindow* window, VkInstance instance, VkPhysica
     }
 
     std::cout << "ImGui initialized successfully" << std::endl;
+    
+    // Load saved configurations from disk
+    loadConfigsFromDisk();
+    
     initialized_ = true;
     return true;
 }
 
 void ImGuiManager::cleanup() {
     if (!initialized_) return;
+
+    // Save configurations before cleanup
+    saveConfigsToDisk();
 
     ImGui_ImplVulkan_Shutdown();
     ImGui_ImplGlfw_Shutdown();
@@ -127,9 +138,9 @@ void ImGuiManager::renderMaterialPanel() {
     ImGui::Text("Albedo Color");
     
     bool changed = false;
-    changed |= ImGui::SliderFloat("Red", &controls_.albedoR, 0.0f, 1.0f);
-    changed |= ImGui::SliderFloat("Green", &controls_.albedoG, 0.0f, 1.0f);
-    changed |= ImGui::SliderFloat("Blue", &controls_.albedoB, 0.0f, 1.0f);
+    changed |= ImGui::DragFloat("Red", &controls_.albedoR, 0.01f, 0.0f, 1.0f, "%.3f");
+    changed |= ImGui::DragFloat("Green", &controls_.albedoG, 0.01f, 0.0f, 1.0f, "%.3f");
+    changed |= ImGui::DragFloat("Blue", &controls_.albedoB, 0.01f, 0.0f, 1.0f, "%.3f");
     
     // Color preview
     ImVec4 colorPreview(controls_.albedoR, controls_.albedoG, controls_.albedoB, 1.0f);
@@ -137,18 +148,18 @@ void ImGuiManager::renderMaterialPanel() {
     
     ImGui::Separator();
     ImGui::Text("Material Properties");
-    changed |= ImGui::SliderFloat("Roughness", &controls_.roughness, 0.0f, 1.0f);
-    changed |= ImGui::SliderFloat("Metallic", &controls_.metallic, 0.0f, 1.0f);
+    changed |= ImGui::DragFloat("Roughness", &controls_.roughness, 0.01f, 0.0f, 1.0f, "%.3f");
+    changed |= ImGui::DragFloat("Metallic", &controls_.metallic, 0.01f, 0.0f, 1.0f, "%.3f");
     
     ImGui::Separator();
     ImGui::Text("Lighting");
-    changed |= ImGui::SliderFloat("Skylight", &controls_.ambientStrength, 0.0f, 1.0f);
-    changed |= ImGui::SliderFloat("Sun Intensity", &controls_.lightIntensity, 0.0f, 20.0f);
+    changed |= ImGui::DragFloat("Skylight", &controls_.ambientStrength, 0.001f, 0.0f, 1.0f, "%.4f");
+    changed |= ImGui::DragFloat("Sun Intensity", &controls_.lightIntensity, 0.1f, 0.0f, 20.0f, "%.2f");
     
     ImGui::Separator();
     ImGui::Text("Emissive (Glow)");
     changed |= ImGui::ColorEdit3("Emissive Color", &controls_.emissiveR, ImGuiColorEditFlags_Float);
-    changed |= ImGui::SliderFloat("Emissive Strength", &controls_.emissiveStrength, 0.0f, 500.0f);
+    changed |= ImGui::DragFloat("Emissive Strength", &controls_.emissiveStrength, 1.0f, 0.0f, 500.0f, "%.1f");
     
     // Emissive color preview
     if (controls_.emissiveStrength > 0.0f) {
@@ -163,8 +174,8 @@ void ImGuiManager::renderMaterialPanel() {
     
     ImGui::Separator();
     ImGui::Text("Sun Direction");
-    changed |= ImGui::SliderFloat("Yaw (Horizontal)", &controls_.lightYaw, 0.0f, 360.0f);
-    changed |= ImGui::SliderFloat("Pitch (Vertical)", &controls_.lightPitch, 0.0f, 90.0f);
+    changed |= ImGui::DragFloat("Yaw (Horizontal)", &controls_.lightYaw, 1.0f, 0.0f, 360.0f, "%.1f°");
+    changed |= ImGui::DragFloat("Pitch (Vertical)", &controls_.lightPitch, 1.0f, 0.0f, 90.0f, "%.1f°");
     
     // If any value changed manually, set to Custom
     if (changed && controls_.currentPreset != 0) {
@@ -176,6 +187,37 @@ void ImGuiManager::renderMaterialPanel() {
     }
     
     ImGui::Separator();
+    ImGui::Text("Config Management");
+    
+    // Save/Load buttons in a grid
+    for (int i = 0; i < 3; i++) {
+        ImGui::PushID(i);
+        
+        // Save button
+        if (ImGui::Button(("Save " + std::to_string(i + 1)).c_str(), ImVec2(60, 0))) {
+            saveConfig(i);
+        }
+        ImGui::SameLine();
+        
+        // Load button (disabled if no data)
+        if (!savedConfigs_[i].hasData) {
+            ImGui::BeginDisabled();
+        }
+        if (ImGui::Button(("Load " + std::to_string(i + 1)).c_str(), ImVec2(60, 0))) {
+            loadConfig(i);
+        }
+        if (!savedConfigs_[i].hasData) {
+            ImGui::EndDisabled();
+        }
+        
+        // Show indicator if slot has data
+        ImGui::SameLine();
+        ImGui::Text(savedConfigs_[i].hasData ? "[*]" : "[ ]");
+        
+        ImGui::PopID();
+    }
+    
+    ImGui::Separator();
     if (ImGui::Button("Reset to Default", ImVec2(-1, 0))) {
         controls_.albedoR = 0.8f;
         controls_.albedoG = 0.3f;
@@ -183,13 +225,13 @@ void ImGuiManager::renderMaterialPanel() {
         controls_.roughness = 0.5f;
         controls_.metallic = 0.0f;
         controls_.ambientStrength = 0.001f;
-        controls_.lightIntensity = 8.0f;
+        controls_.lightIntensity = 0.1f;   // Updated to current level
         controls_.lightYaw = 225.0f;
         controls_.lightPitch = 45.0f;
-        controls_.emissiveR = 0.0f;
+        controls_.emissiveR = 0.549f;      // Red emissive
         controls_.emissiveG = 0.0f;
         controls_.emissiveB = 0.0f;
-        controls_.emissiveStrength = 0.0f;
+        controls_.emissiveStrength = 0.1f; // Default emissive glow
         controls_.currentPreset = 0;
         controls_.valuesChanged = true;
     }
@@ -237,15 +279,15 @@ void ImGuiManager::renderBloomPanel() {
     
     ImGui::Spacing();
     
-    // Bloom strength slider
+    // Bloom strength slider with direct input
     ImGui::Text("Bloom Strength");
-    if (ImGui::SliderFloat("##BloomStrength", &bloomControls_.strength, 0.0f, 0.2f, "%.3f")) {
+    if (ImGui::DragFloat("##BloomStrength", &bloomControls_.strength, 0.001f, 0.0f, 5.0f, "%.3f")) {
         changed = true;
     }
     
-    // Bloom threshold slider
+    // Bloom threshold slider with direct input
     ImGui::Text("Threshold (Brightness)");
-    if (ImGui::SliderFloat("##BloomThreshold", &bloomControls_.threshold, 0.0f, 3.0f, "%.2f")) {
+    if (ImGui::DragFloat("##BloomThreshold", &bloomControls_.threshold, 0.01f, 0.0f, 10.0f, "%.2f")) {
         changed = true;
     }
     
@@ -265,6 +307,141 @@ void ImGuiManager::applyPreset(int presetIndex) {
     controls_.albedoB = preset.b;
     controls_.roughness = preset.roughness;
     controls_.metallic = preset.metallic;
+}
+
+void ImGuiManager::saveConfig(int slot) {
+    if (slot < 0 || slot >= 3) return;
+    
+    savedConfigs_[slot].material = controls_;
+    savedConfigs_[slot].bloom = bloomControls_;
+    savedConfigs_[slot].hasData = true;
+    
+    // Auto-save to disk after each save
+    saveConfigsToDisk();
+    
+    std::cout << "Saved configuration to slot " << (slot + 1) << std::endl;
+}
+
+void ImGuiManager::loadConfig(int slot) {
+    if (slot < 0 || slot >= 3 || !savedConfigs_[slot].hasData) return;
+    
+    controls_ = savedConfigs_[slot].material;
+    bloomControls_ = savedConfigs_[slot].bloom;
+    controls_.valuesChanged = true;
+    bloomControls_.valuesChanged = true;
+    
+    std::cout << "Loaded configuration from slot " << (slot + 1) << std::endl;
+}
+
+void ImGuiManager::saveConfigsToDisk() {
+    try {
+        json j;
+        
+        // Save all 3 config slots
+        for (int i = 0; i < 3; i++) {
+            if (!savedConfigs_[i].hasData) continue;
+            
+            json slot;
+            slot["hasData"] = true;
+            
+            // Material settings
+            auto& mat = savedConfigs_[i].material;
+            slot["material"] = {
+                {"albedoR", mat.albedoR},
+                {"albedoG", mat.albedoG},
+                {"albedoB", mat.albedoB},
+                {"roughness", mat.roughness},
+                {"metallic", mat.metallic},
+                {"ambientStrength", mat.ambientStrength},
+                {"lightIntensity", mat.lightIntensity},
+                {"lightYaw", mat.lightYaw},
+                {"lightPitch", mat.lightPitch},
+                {"emissiveR", mat.emissiveR},
+                {"emissiveG", mat.emissiveG},
+                {"emissiveB", mat.emissiveB},
+                {"emissiveStrength", mat.emissiveStrength}
+            };
+            
+            // Bloom settings
+            auto& bloom = savedConfigs_[i].bloom;
+            slot["bloom"] = {
+                {"enabled", bloom.enabled},
+                {"strength", bloom.strength},
+                {"threshold", bloom.threshold}
+            };
+            
+            j["configs"][i] = slot;
+        }
+        
+        // Write to file
+        std::ofstream file("vibe3d_presets.json");
+        if (file.is_open()) {
+            file << j.dump(2);  // Pretty print with 2-space indent
+            file.close();
+            std::cout << "Saved all presets to vibe3d_presets.json" << std::endl;
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "Error saving configs to disk: " << e.what() << std::endl;
+    }
+}
+
+void ImGuiManager::loadConfigsFromDisk() {
+    try {
+        std::ifstream file("vibe3d_presets.json");
+        if (!file.is_open()) {
+            std::cout << "No saved presets found, using defaults" << std::endl;
+            return;
+        }
+        
+        json j;
+        file >> j;
+        file.close();
+        
+        // Load all 3 config slots
+        if (j.contains("configs")) {
+            for (int i = 0; i < 3; i++) {
+                std::string slotKey = std::to_string(i);
+                if (!j["configs"].contains(slotKey)) continue;
+                
+                auto& slot = j["configs"][slotKey];
+                if (!slot["hasData"].get<bool>()) continue;
+                
+                // Load material settings
+                if (slot.contains("material")) {
+                    auto& mat = savedConfigs_[i].material;
+                    auto& jmat = slot["material"];
+                    mat.albedoR = jmat["albedoR"].get<float>();
+                    mat.albedoG = jmat["albedoG"].get<float>();
+                    mat.albedoB = jmat["albedoB"].get<float>();
+                    mat.roughness = jmat["roughness"].get<float>();
+                    mat.metallic = jmat["metallic"].get<float>();
+                    mat.ambientStrength = jmat["ambientStrength"].get<float>();
+                    mat.lightIntensity = jmat["lightIntensity"].get<float>();
+                    mat.lightYaw = jmat["lightYaw"].get<float>();
+                    mat.lightPitch = jmat["lightPitch"].get<float>();
+                    mat.emissiveR = jmat["emissiveR"].get<float>();
+                    mat.emissiveG = jmat["emissiveG"].get<float>();
+                    mat.emissiveB = jmat["emissiveB"].get<float>();
+                    mat.emissiveStrength = jmat["emissiveStrength"].get<float>();
+                }
+                
+                // Load bloom settings
+                if (slot.contains("bloom")) {
+                    auto& bloom = savedConfigs_[i].bloom;
+                    auto& jbloom = slot["bloom"];
+                    bloom.enabled = jbloom["enabled"].get<bool>();
+                    bloom.strength = jbloom["strength"].get<float>();
+                    bloom.threshold = jbloom["threshold"].get<float>();
+                }
+                
+                savedConfigs_[i].hasData = true;
+            }
+            
+            std::cout << "Loaded presets from vibe3d_presets.json" << std::endl;
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "Error loading configs from disk: " << e.what() << std::endl;
+    }
 }
 
 void ImGuiManager::onWindowResize() {
