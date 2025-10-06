@@ -27,6 +27,11 @@ public:
     bool shouldDecreaseExposure(GLFWwindow* window) const;
     bool shouldExit(GLFWwindow* window) const;
     
+    // Camera freeze toggle
+    bool shouldToggleCameraFreeze(GLFWwindow* window);
+    bool isCameraFrozen() const { return cameraFrozen; }
+    void setCursorMode(GLFWwindow* window);
+    
     // Mouse handling
     void handleMouseMovement(double xpos, double ypos);
     glm::vec3 getCameraFront() const { return cameraFront; }
@@ -48,6 +53,8 @@ private:
     bool materialKeyPressed;
     bool raytracingKeyPressed;
     bool shadowDebugKeyPressed;
+    bool cameraFreezeKeyPressed;
+    bool cameraFrozen;
     
     // Static callback functions
     static void mouse_callback(GLFWwindow* window, double xpos, double ypos);

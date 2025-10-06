@@ -6,6 +6,7 @@
 #include "VulkanBuffer.h"
 #include "VulkanImage.h"
 #include "VulkanDescriptor.h"
+#include "ImGuiManager.h"
 #include "modules/GeometryManager.h"
 #include <memory>
 #include <vector>
@@ -122,6 +123,7 @@ private:
     
     // Modules
     std::unique_ptr<GeometryManager> geometryManager_;
+    std::unique_ptr<ImGuiManager> imguiManager_;
     
     // Render pass and framebuffers
     VkRenderPass renderPass_ = VK_NULL_HANDLE;

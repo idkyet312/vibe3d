@@ -10,6 +10,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 find_package(glfw3 REQUIRED)
 find_package(glm REQUIRED)
 find_package(glad CONFIG REQUIRED)
+find_package(imgui CONFIG REQUIRED)
 
 # Try to find Vulkan (optional)
 find_package(Vulkan)
@@ -35,6 +36,7 @@ if(Vulkan_FOUND)
         src/vulkan/VulkanDescriptor.cpp
         src/vulkan/ForwardPlusRenderer.cpp
         src/vulkan/modules/GeometryManager.cpp
+        src/vulkan/ImGuiManager.cpp
     )
     message(STATUS "? Vulkan SDK found - building with Vulkan support")
 else()
@@ -57,6 +59,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     glfw
     glm::glm
     glad::glad
+    imgui::imgui
 )
 
 # Add Vulkan support if available

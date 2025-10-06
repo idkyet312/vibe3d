@@ -16,6 +16,8 @@ InputManager::InputManager()
     , materialKeyPressed(false)
     , raytracingKeyPressed(false)
     , shadowDebugKeyPressed(false)
+    , cameraFreezeKeyPressed(false)
+    , cameraFrozen(false)
 {
     instance = this;
 }
@@ -104,7 +106,34 @@ bool InputManager::shouldExit(GLFWwindow* window) const {
     return glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS;
 }
 
+bool InputManager::shouldToggleCameraFreeze(GLFWwindow* window) {
+    if (glfwGetKey(window, GLFW_KEY_TAB) == GLFW_PRESS && !cameraFreezeKeyPressed) {
+        cameraFreezeKeyPressed = true;
+        cameraFrozen = !cameraFrozen;
+        std::cout << "[INPUT] Camera " << (cameraFrozen ? "FROZEN" : "UNFROZEN") << " - Use TAB to toggle" << std::endl;
+        setCursorMode(window);
+        return true;
+    }
+    if (glfwGetKey(window, GLFW_KEY_TAB) == GLFW_RELEASE) {
+        cameraFreezeKeyPressed = false;
+    }
+    return false;
+}
+
+void InputManager::setCursorMode(GLFWwindow* window) {
+    if (cameraFrozen) {
+        glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+    } else {
+        glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+    }
+}
+
 void InputManager::handleMouseMovement(double xpos, double ypos) {
+    // Don't update camera if frozen
+    if (cameraFrozen) {
+        return;
+    }
+    
     if (firstMouse) {
         lastX = static_cast<float>(xpos);
         lastY = static_cast<float>(ypos);

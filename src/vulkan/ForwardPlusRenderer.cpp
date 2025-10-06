@@ -116,6 +116,15 @@ bool ForwardPlusRenderer::initialize(GLFWwindow* window) {
         return false;
     }
     
+    // Initialize ImGui
+    imguiManager_ = std::make_unique<ImGuiManager>();
+    if (!imguiManager_->initialize(window, device_->getInstance(), device_->getPhysicalDevice(),
+                                   device_->getDevice(), device_->getQueueFamilies().graphicsFamily.value(),
+                                   device_->getGraphicsQueue(), renderPass_)) {
+        std::cerr << "Failed to initialize ImGui" << std::endl;
+        return false;
+    }
+    
     std::cout << "Forward+ renderer initialized: " << numTilesX_ << "x" << numTilesY_ << " tiles" << std::endl;
     
     initialized_ = true;
@@ -125,6 +134,9 @@ bool ForwardPlusRenderer::initialize(GLFWwindow* window) {
 void ForwardPlusRenderer::cleanup() {
     if (device_) {
         device_->waitIdle();
+        
+        // Clean up ImGui
+        imguiManager_.reset();
         
         // Clean up shadow resources
         if (shadowSampler_ != VK_NULL_HANDLE) {
@@ -916,6 +928,37 @@ void ForwardPlusRenderer::endFrame() {
 }
 
 void ForwardPlusRenderer::renderScene(const CameraUBO& camera, std::span<const PointLight> lights) {
+    // Update ImGui
+    if (imguiManager_) {
+        imguiManager_->beginFrame();
+        imguiManager_->renderMaterialPanel();
+        
+        // Apply ImGui material values to materialConfig_
+        auto& controls = imguiManager_->getMaterialControls();
+        if (controls.valuesChanged) {
+            materialConfig_.albedoR = controls.albedoR;
+            materialConfig_.albedoG = controls.albedoG;
+            materialConfig_.albedoB = controls.albedoB;
+            materialConfig_.roughness = controls.roughness;
+            materialConfig_.metallic = controls.metallic;
+            materialConfig_.ambientStrength = controls.ambientStrength;
+            materialConfig_.lightIntensity = controls.lightIntensity;
+            materialConfig_.lightYaw = controls.lightYaw;
+            materialConfig_.lightPitch = controls.lightPitch;
+            
+            // Calculate light direction from angles
+            float yawRad = glm::radians(materialConfig_.lightYaw);
+            float pitchRad = glm::radians(materialConfig_.lightPitch);
+            lightDirection_ = glm::normalize(glm::vec3(
+                std::cos(pitchRad) * std::cos(yawRad),
+                -std::sin(pitchRad),
+                std::cos(pitchRad) * std::sin(yawRad)
+            ));
+            
+            controls.valuesChanged = false;
+        }
+    }
+    
     // Update camera UBO
     cameraBuffers_[currentFrame_]->copyFrom(&camera, sizeof(CameraUBO));
     
@@ -1008,6 +1051,11 @@ void ForwardPlusRenderer::renderScene(const CameraUBO& camera, std::span<const P
     
     // Draw floor (6 indices starting at index 36)
     vkCmdDrawIndexed(cmd, 6, 1, 36, 0, 0);
+    
+    // Render ImGui
+    if (imguiManager_) {
+        imguiManager_->endFrame(cmd);
+    }
     
     vkCmdEndRenderPass(cmd);
     

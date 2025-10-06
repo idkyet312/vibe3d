@@ -120,6 +120,7 @@ int main() {
     std::cout << "\n=== CONTROLS ===" << std::endl;
     std::cout << "WASD   - Move camera" << std::endl;
     std::cout << "Mouse  - Look around" << std::endl;
+    std::cout << "TAB    - Toggle camera freeze (for GUI interaction)" << std::endl;
     std::cout << "Space  - Jump" << std::endl;
     std::cout << "Click  - Shoot" << std::endl;
     std::cout << "E      - Spawn objects" << std::endl;
@@ -157,6 +158,9 @@ int main() {
         if (input->shouldExit(window)) {
             break;
         }
+
+        // Check for camera freeze toggle (TAB key)
+        input->shouldToggleCameraFreeze(window);
 
         // Check for shadow debug toggle (B key) - Vulkan only
         if (useVulkan && vulkanRenderer) {

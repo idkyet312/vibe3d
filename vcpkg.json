@@ -6,6 +6,10 @@
         "glfw3",
         "glm",
         "glad",
-        "nlohmann-json"
+        "nlohmann-json",
+        {
+            "name": "imgui",
+            "features": ["glfw-binding", "vulkan-binding"]
+        }
     ]
 }

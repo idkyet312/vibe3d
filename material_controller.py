@@ -1,6 +1,16 @@
 #!/usr/bin/env python3
 """
-Material Controller - Real-time GUI for adjusting Vibe3D PBR material properties
+Material Controller - Real-time GUI for adjusting Vibe3D PBR mat    def init_ui(self):
+        self.setWindowTitle("Vibe3D Material Controller")
+        self.setGeometry(100, 100, 400, 750)
+        
+        # Set window to stay on top
+        self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
+        
+        # Main widget and layout
+        main_widget = QWidget()
+        self.setCentralWidget(main_widget)
+        layout = QVBoxLayout(main_widget)operties
 """
 
 import sys
