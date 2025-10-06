@@ -13,6 +13,9 @@ find_package(glad CONFIG REQUIRED)
 find_package(imgui CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 
+# tinygltf is header-only
+find_path(TINYGLTF_INCLUDE_DIRS "tiny_gltf.h")
+
 # Try to find Vulkan (optional)
 find_package(Vulkan)
 
@@ -54,6 +57,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${TINYGLTF_INCLUDE_DIRS}
 )
 
 # Link libraries

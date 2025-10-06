@@ -147,6 +147,45 @@ bool ForwardPlusRenderer::initialize(GLFWwindow* window) {
         return false;
     }
     
+    // Apply loaded ImGui settings immediately at startup
+    auto& controls = imguiManager_->getMaterialControls();
+    if (controls.valuesChanged) {
+        materialConfig_.albedoR = controls.albedoR;
+        materialConfig_.albedoG = controls.albedoG;
+        materialConfig_.albedoB = controls.albedoB;
+        materialConfig_.roughness = controls.roughness;
+        materialConfig_.metallic = controls.metallic;
+        materialConfig_.ambientStrength = controls.ambientStrength;
+        materialConfig_.lightIntensity = controls.lightIntensity;
+        materialConfig_.lightYaw = controls.lightYaw;
+        materialConfig_.lightPitch = controls.lightPitch;
+        materialConfig_.emissiveR = controls.emissiveR;
+        materialConfig_.emissiveG = controls.emissiveG;
+        materialConfig_.emissiveB = controls.emissiveB;
+        materialConfig_.emissiveStrength = controls.emissiveStrength;
+        
+        // Calculate light direction from angles
+        float yawRad = glm::radians(materialConfig_.lightYaw);
+        float pitchRad = glm::radians(materialConfig_.lightPitch);
+        lightDirection_ = glm::normalize(glm::vec3(
+            std::cos(pitchRad) * std::cos(yawRad),
+            -std::sin(pitchRad),
+            std::cos(pitchRad) * std::sin(yawRad)
+        ));
+        
+        controls.valuesChanged = false;
+        std::cout << "Applied loaded material settings at startup" << std::endl;
+    }
+    
+    auto& bloomControls = imguiManager_->getBloomControls();
+    if (bloomControls.valuesChanged) {
+        setBloomEnabled(bloomControls.enabled);
+        setBloomStrength(bloomControls.strength);
+        setBloomThreshold(bloomControls.threshold);
+        bloomControls.valuesChanged = false;
+        std::cout << "Applied loaded bloom settings at startup" << std::endl;
+    }
+    
     // Load shadow bias configuration once at startup
     loadShadowBiasConfig();
     
@@ -889,8 +928,19 @@ bool ForwardPlusRenderer::createCubeGeometry() {
     vertexBuffer_ = std::make_unique<VulkanBuffer>();
     indexBuffer_ = std::make_unique<VulkanBuffer>();
     
-    // Use GeometryManager to create cube geometry
-    return geometryManager_->createCubeGeometry(*vertexBuffer_, *indexBuffer_, indexCount_);
+    // Try to load a model file first, fall back to cube if not found
+    const std::string modelPath = "model.glb";
+    
+    // Check if model file exists
+    std::ifstream modelFile(modelPath);
+    if (modelFile.good()) {
+        modelFile.close();
+        std::cout << "Loading model from: " << modelPath << std::endl;
+        return geometryManager_->loadModelGeometry(modelPath, *vertexBuffer_, *indexBuffer_, indexCount_);
+    } else {
+        std::cout << "No model.glb found, using default cube" << std::endl;
+        return geometryManager_->createCubeGeometry(*vertexBuffer_, *indexBuffer_, indexCount_);
+    }
 }
 
 bool ForwardPlusRenderer::createSyncObjects() {
@@ -1060,11 +1110,10 @@ void ForwardPlusRenderer::renderScene(const CameraUBO& camera, std::span<const P
     
     float time = static_cast<float>(glfwGetTime());
     
-    // Draw rotating cube hovering above the floor
+    // Draw rotating model/cube hovering above the floor
     glm::mat4 cubeModel = glm::mat4(1.0f);
     cubeModel = glm::translate(cubeModel, glm::vec3(0.0f, 0.5f, 0.0f)); // Hover above floor
-    cubeModel = glm::rotate(cubeModel, time * glm::radians(30.0f), glm::vec3(0.0f, 1.0f, 0.0f));
-    cubeModel = glm::rotate(cubeModel, time * glm::radians(20.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+    cubeModel = glm::rotate(cubeModel, time * glm::radians(30.0f), glm::vec3(0.0f, 1.0f, 0.0f)); // Yaw only (Y-axis)
     
     // Push model matrix and debug mode for cube
     PushConstants pushConst{
@@ -1443,11 +1492,10 @@ void ForwardPlusRenderer::renderShadowCascades(VkCommandBuffer cmd) {
         
         float time = static_cast<float>(glfwGetTime());
         
-        // Render rotating cube
+        // Render rotating model/cube
         glm::mat4 cubeModel = glm::mat4(1.0f);
         cubeModel = glm::translate(cubeModel, glm::vec3(0.0f, 0.5f, 0.0f));
-        cubeModel = glm::rotate(cubeModel, time * glm::radians(30.0f), glm::vec3(0.0f, 1.0f, 0.0f));
-        cubeModel = glm::rotate(cubeModel, time * glm::radians(20.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+        cubeModel = glm::rotate(cubeModel, time * glm::radians(30.0f), glm::vec3(0.0f, 1.0f, 0.0f)); // Yaw only (Y-axis)
         
         // Push model and light space matrices
         struct {
