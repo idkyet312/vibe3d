@@ -147,6 +147,9 @@ bool ForwardPlusRenderer::initialize(GLFWwindow* window) {
         return false;
     }
     
+    // Load shadow bias configuration once at startup
+    loadShadowBiasConfig();
+    
     std::cout << "Forward+ renderer initialized: " << numTilesX_ << "x" << numTilesY_ << " tiles" << std::endl;
     
     initialized_ = true;
@@ -1359,9 +1362,6 @@ glm::mat4 ForwardPlusRenderer::calculateLightSpaceMatrix(float nearPlane, float 
 }
 
 void ForwardPlusRenderer::updateShadowUBO() {
-    // Load shadow bias config from JSON file (updated by GUI)
-    loadShadowBiasConfig();
-    
     ShadowUBO shadowUBO{};
     
     // Calculate light space matrices for each cascade
@@ -1403,9 +1403,6 @@ void ForwardPlusRenderer::updateMaterialUBO() {
 }
 
 void ForwardPlusRenderer::renderShadowCascades(VkCommandBuffer cmd) {
-    // Load shadow bias config from JSON file (updated by GUI)
-    loadShadowBiasConfig();
-    
     // Render scene geometry from light's perspective for each cascade
     for (size_t i = 0; i < NUM_CASCADES; ++i) {
         VkClearValue clearValue{};
@@ -1545,11 +1542,13 @@ void ForwardPlusRenderer::loadShadowBiasConfig() {
                 shadowBiasConfig_.cascade3 = config["cascade3"].get<float>();
             }
             
-            std::cout << "Loaded shadow bias config: constant=" << shadowBiasConfig_.depthBiasConstant 
+            std::cout << "[INIT] Shadow bias config loaded: constant=" << shadowBiasConfig_.depthBiasConstant 
                       << ", slope=" << shadowBiasConfig_.depthBiasSlope << std::endl;
+        } else {
+            std::cout << "[INIT] Using default shadow bias config (file not found)" << std::endl;
         }
     } catch (const std::exception& e) {
-        std::cout << "Using default shadow bias config (config file not found or invalid)" << std::endl;
+        std::cout << "[INIT] Using default shadow bias config (error: " << e.what() << ")" << std::endl;
     }
 }
 
