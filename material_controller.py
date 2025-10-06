@@ -18,6 +18,58 @@ class MaterialController(QMainWindow):
         super().__init__()
         self.config_file = Path("build/material_config.json")
         
+        # Material presets
+        self.presets = {
+            "Rough Plastic": {
+                "roughness": 0.8, "metallic": 0.0,
+                "albedoR": 0.8, "albedoG": 0.3, "albedoB": 0.2
+            },
+            "Smooth Plastic": {
+                "roughness": 0.2, "metallic": 0.0,
+                "albedoR": 0.2, "albedoG": 0.6, "albedoB": 0.9
+            },
+            "Rough Metal": {
+                "roughness": 0.7, "metallic": 1.0,
+                "albedoR": 0.7, "albedoG": 0.7, "albedoB": 0.7
+            },
+            "Polished Metal": {
+                "roughness": 0.1, "metallic": 1.0,
+                "albedoR": 0.8, "albedoG": 0.8, "albedoB": 0.8
+            },
+            "Gold": {
+                "roughness": 0.2, "metallic": 1.0,
+                "albedoR": 1.0, "albedoG": 0.78, "albedoB": 0.34
+            },
+            "Copper": {
+                "roughness": 0.3, "metallic": 1.0,
+                "albedoR": 0.95, "albedoG": 0.64, "albedoB": 0.54
+            },
+            "Chrome": {
+                "roughness": 0.05, "metallic": 1.0,
+                "albedoR": 0.9, "albedoG": 0.9, "albedoB": 0.9
+            },
+            "Aluminum": {
+                "roughness": 0.4, "metallic": 1.0,
+                "albedoR": 0.91, "albedoG": 0.92, "albedoB": 0.92
+            },
+            "Rubber": {
+                "roughness": 0.9, "metallic": 0.0,
+                "albedoR": 0.1, "albedoG": 0.1, "albedoB": 0.1
+            },
+            "Wood": {
+                "roughness": 0.7, "metallic": 0.0,
+                "albedoR": 0.55, "albedoG": 0.35, "albedoB": 0.2
+            },
+            "Glass": {
+                "roughness": 0.05, "metallic": 0.0,
+                "albedoR": 0.95, "albedoG": 0.95, "albedoB": 0.95
+            },
+            "Ceramic": {
+                "roughness": 0.3, "metallic": 0.0,
+                "albedoR": 0.9, "albedoG": 0.9, "albedoB": 0.85
+            }
+        }
+        
         # Default values
         self.material_values = {
             "roughness": 0.5,
@@ -53,6 +105,32 @@ class MaterialController(QMainWindow):
         title.setStyleSheet("font-size: 16px; font-weight: bold; padding: 10px;")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title)
+        
+        # Material Presets dropdown
+        preset_layout = QHBoxLayout()
+        preset_label = QLabel("Material Preset:")
+        preset_label.setMinimumWidth(140)
+        preset_layout.addWidget(preset_label)
+        
+        self.preset_combo = QComboBox()
+        self.preset_combo.addItems([
+            "Custom",
+            "Rough Plastic",
+            "Smooth Plastic",
+            "Rough Metal",
+            "Polished Metal",
+            "Gold",
+            "Copper",
+            "Chrome",
+            "Aluminum",
+            "Rubber",
+            "Wood",
+            "Glass",
+            "Ceramic"
+        ])
+        self.preset_combo.currentTextChanged.connect(self.apply_preset)
+        preset_layout.addWidget(self.preset_combo)
+        layout.addLayout(preset_layout)
         
         # Albedo Color group
         albedo_group = QGroupBox("Cube Color (RGB)")
@@ -163,6 +241,34 @@ class MaterialController(QMainWindow):
         layout.addLayout(row_layout)
         return slider, spinbox
     
+    def apply_preset(self, preset_name):
+        """Apply a material preset"""
+        if preset_name == "Custom":
+            return
+        
+        if preset_name in self.presets:
+            preset = self.presets[preset_name]
+            
+            # Update material values
+            self.material_values["roughness"] = preset["roughness"]
+            self.material_values["metallic"] = preset["metallic"]
+            self.material_values["albedoR"] = preset["albedoR"]
+            self.material_values["albedoG"] = preset["albedoG"]
+            self.material_values["albedoB"] = preset["albedoB"]
+            
+            # Update UI displays
+            self.roughness_spin.setValue(preset["roughness"])
+            self.metallic_spin.setValue(preset["metallic"])
+            self.albedo_r_spin.setValue(preset["albedoR"])
+            self.albedo_g_spin.setValue(preset["albedoG"])
+            self.albedo_b_spin.setValue(preset["albedoB"])
+            
+            self.update_color_preview()
+            self.save_config()
+            self.status_label.setText(f"Applied preset: {preset_name}")
+            self.status_label.setStyleSheet("padding: 5px; background-color: #90EE90;")
+            QTimer.singleShot(2000, lambda: self.status_label.setStyleSheet("padding: 5px; background-color: #e0e0e0;"))
+    
     def on_value_changed(self):
         """Called when any value changes"""
         self.material_values["albedoR"] = self.albedo_r_spin.value()
@@ -174,6 +280,12 @@ class MaterialController(QMainWindow):
         self.material_values["lightIntensity"] = self.light_intensity_spin.value()
         self.material_values["lightYaw"] = self.light_yaw_spin.value()
         self.material_values["lightPitch"] = self.light_pitch_spin.value()
+        
+        # Set preset to "Custom" when user manually changes values
+        if self.preset_combo.currentText() != "Custom":
+            self.preset_combo.blockSignals(True)
+            self.preset_combo.setCurrentText("Custom")
+            self.preset_combo.blockSignals(False)
         
         self.update_color_preview()
         self.status_label.setText("Material changed - will auto-save...")
