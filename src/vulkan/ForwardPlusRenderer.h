@@ -66,6 +66,9 @@ public:
     // Debug mode control
     void cycleShadowDebugMode();  // NEW
     int getShadowDebugMode() const noexcept { return shadowDebugMode_; }  // NEW
+    
+    // Camera control for material updates
+    void setCameraFrozen(bool frozen) noexcept { cameraFrozen_ = frozen; }
 
 private:
     // Initialization helpers
@@ -238,6 +241,9 @@ private:
     
     // Debug mode
     int shadowDebugMode_ = 0;  // 0 = normal, 1 = show shadows, 2 = show cascades  // NEW
+    
+    // Camera state for material updates
+    bool cameraFrozen_ = false;
 };
 
 } // namespace vibe::vk

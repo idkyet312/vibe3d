@@ -934,9 +934,9 @@ void ForwardPlusRenderer::renderScene(const CameraUBO& camera, std::span<const P
         imguiManager_->renderMaterialPanel();
         imguiManager_->renderFPSCounter();
         
-        // Apply ImGui material values to materialConfig_
+        // Only apply ImGui material values when camera is frozen (TAB toggled on)
         auto& controls = imguiManager_->getMaterialControls();
-        if (controls.valuesChanged) {
+        if (cameraFrozen_ && controls.valuesChanged) {
             materialConfig_.albedoR = controls.albedoR;
             materialConfig_.albedoG = controls.albedoG;
             materialConfig_.albedoB = controls.albedoB;

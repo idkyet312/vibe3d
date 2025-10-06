@@ -180,6 +180,9 @@ int main() {
         physics->updateMainObject(mainObjPos, deltaTime);
 
         if (useVulkan && vulkanRenderer) {
+            // Update camera frozen state for material control
+            vulkanRenderer->setCameraFrozen(input->isCameraFrozen());
+            
             vulkanRenderer->beginFrame();
             
             vibe::vk::CameraUBO camera{};
