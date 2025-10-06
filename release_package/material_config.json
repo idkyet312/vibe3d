@@ -1,0 +1,13 @@
+{
+  "roughness": 0.2,
+  "metallic": 0.0,
+  "albedoR": 0.8,
+  "albedoG": 0.3,
+  "albedoB": 0.2,
+  "ambientStrength": 0.0,
+  "lightIntensity": 8.0,
+  "emissiveR": 0.0,
+  "emissiveG": 0.0,
+  "emissiveB": 0.0,
+  "emissiveStrength": 0.0
+}

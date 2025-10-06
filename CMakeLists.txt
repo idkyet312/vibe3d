@@ -37,6 +37,7 @@ if(Vulkan_FOUND)
         src/vulkan/ForwardPlusRenderer.cpp
         src/vulkan/modules/GeometryManager.cpp
         src/vulkan/ImGuiManager.cpp
+        src/vulkan/PostProcessManager.cpp
     )
     message(STATUS "? Vulkan SDK found - building with Vulkan support")
 else()

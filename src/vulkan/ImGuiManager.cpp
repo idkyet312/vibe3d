@@ -222,6 +222,40 @@ void ImGuiManager::renderFPSCounter() {
     ImGui::End();
 }
 
+void ImGuiManager::renderBloomPanel() {
+    ImGui::SetNextWindowPos(ImVec2(10, 570), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(350, 150), ImGuiCond_FirstUseEver);
+    
+    ImGui::Begin("Bloom Settings", nullptr);
+    
+    bool changed = false;
+    
+    // Bloom enable/disable
+    if (ImGui::Checkbox("Enable Bloom", &bloomControls_.enabled)) {
+        changed = true;
+    }
+    
+    ImGui::Spacing();
+    
+    // Bloom strength slider
+    ImGui::Text("Bloom Strength");
+    if (ImGui::SliderFloat("##BloomStrength", &bloomControls_.strength, 0.0f, 0.2f, "%.3f")) {
+        changed = true;
+    }
+    
+    // Bloom threshold slider
+    ImGui::Text("Threshold (Brightness)");
+    if (ImGui::SliderFloat("##BloomThreshold", &bloomControls_.threshold, 0.0f, 3.0f, "%.2f")) {
+        changed = true;
+    }
+    
+    if (changed) {
+        bloomControls_.valuesChanged = true;
+    }
+    
+    ImGui::End();
+}
+
 void ImGuiManager::applyPreset(int presetIndex) {
     if (presetIndex < 0 || presetIndex >= std::size(PRESETS)) return;
     

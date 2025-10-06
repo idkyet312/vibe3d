@@ -106,6 +106,22 @@ bool ForwardPlusRenderer::initialize(GLFWwindow* window) {
         return false;
     }
     
+    // Initialize post-processing system
+    postProcessManager_ = std::make_unique<PostProcessManager>(*device_);
+    PostProcessManager::Config ppConfig{
+        .width = config_.width,
+        .height = config_.height,
+        .enableBloom = true,
+        .bloomThreshold = 1.0f,
+        .bloomIntensity = 0.3f,
+        .bloomRadius = 4.0f
+    };
+    
+    if (!postProcessManager_->initialize(ppConfig)) {
+        std::cerr << "Failed to initialize post-processing" << std::endl;
+        return false;
+    }
+    
     if (!createSyncObjects()) {
         std::cerr << "Failed to create sync objects" << std::endl;
         return false;
@@ -932,6 +948,7 @@ void ForwardPlusRenderer::renderScene(const CameraUBO& camera, std::span<const P
     if (imguiManager_) {
         imguiManager_->beginFrame();
         imguiManager_->renderMaterialPanel();
+        imguiManager_->renderBloomPanel();
         imguiManager_->renderFPSCounter();
         
         // Only apply ImGui material values when camera is frozen (TAB toggled on)
@@ -961,6 +978,15 @@ void ForwardPlusRenderer::renderScene(const CameraUBO& camera, std::span<const P
             ));
             
             controls.valuesChanged = false;
+        }
+        
+        // Apply bloom controls via PostProcessManager
+        auto& bloomControls = imguiManager_->getBloomControls();
+        if (cameraFrozen_ && bloomControls.valuesChanged) {
+            setBloomEnabled(bloomControls.enabled);
+            setBloomStrength(bloomControls.strength);
+            setBloomThreshold(bloomControls.threshold);
+            bloomControls.valuesChanged = false;
         }
     }
     
@@ -1580,6 +1606,39 @@ void ForwardPlusRenderer::loadMaterialConfig() {
     } catch (const std::exception& e) {
         std::cout << "Using default material config (config file not found or invalid)" << std::endl;
     }
+}
+
+// Bloom control delegation to PostProcessManager
+void ForwardPlusRenderer::setBloomEnabled(bool enabled) {
+    if (postProcessManager_) {
+        postProcessManager_->setBloomEnabled(enabled);
+    }
+}
+
+bool ForwardPlusRenderer::isBloomEnabled() const {
+    return postProcessManager_ ? postProcessManager_->isInitialized() : false;
+}
+
+void ForwardPlusRenderer::setBloomStrength(float strength) {
+    if (postProcessManager_) {
+        postProcessManager_->setBloomIntensity(strength);
+    }
+}
+
+float ForwardPlusRenderer::getBloomStrength() const {
+    // Return default if no post-process manager
+    return 0.3f;
+}
+
+void ForwardPlusRenderer::setBloomThreshold(float threshold) {
+    if (postProcessManager_) {
+        postProcessManager_->setBloomThreshold(threshold);
+    }
+}
+
+float ForwardPlusRenderer::getBloomThreshold() const {
+    // Return default if no post-process manager
+    return 1.0f;
 }
 
 

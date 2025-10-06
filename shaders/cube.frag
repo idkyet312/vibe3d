@@ -174,17 +174,17 @@ void main() {
         ambientStrength = material.ambientStrength;  // Use GUI-controlled ambient
         lightIntensity = material.lightIntensity;  // Use GUI-controlled light intensity
         
-        // Very small, tight glow right around the cube base
+        // Wide, dramatic glow around the cube base for bloom effect
         // Assume cube is at approximately (0, 1.5, 0) in world space
         vec3 cubePos = vec3(0.0, 1.5, 0.0);
         float distance = length(fragPos - cubePos);
         
-        // Extremely tight falloff - only visible within ~1 meter
-        float falloff = 1.0 / (1.0 + distance * distance * 8.0);
+        // Much wider falloff for dramatic visible glow spread
+        float falloff = 1.0 / (1.0 + distance * distance * 0.5);
         
-        // Very subtle glow, only visible immediately around the cube
+        // Very strong glow for dramatic bloom visibility
         emissive = material.emissive;
-        emissiveStrength = material.emissiveStrength * falloff * 0.1;
+        emissiveStrength = material.emissiveStrength * falloff * 5.0; // 50x stronger than original
     }
     
     vec3 N = normalize(fragNormal);
@@ -250,16 +250,13 @@ void main() {
     // Ambient lighting
     vec3 ambient = vec3(ambientStrength) * albedo;
     
-    // Add emissive component (self-illumination)
-    vec3 emissiveColor = emissive * emissiveStrength;
+    // Add emissive component (self-illumination) - boosted for bloom visibility
+    vec3 emissiveColor = emissive * emissiveStrength * 10.0;
     
     vec3 color = ambient + Lo + emissiveColor;
     
-    // Improved HDR tonemapping (ACES approximation for better handling of bright emissives)
-    vec3 a = color * 2.51;
-    vec3 b = color * 0.03 + 0.59;
-    vec3 c = color * 2.43 + 0.14;
-    color = clamp((a) / (b + c), 0.0, 1.0);
+    // Simple exposure
+    color = color * 1.0;
     
     // Gamma correction
     color = pow(color, vec3(1.0/2.2));

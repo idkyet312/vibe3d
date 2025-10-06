@@ -23,6 +23,14 @@ if %ERRORLEVEL% NEQ 0 (
 )
 echo [OK] shadow_cascade.vert.spv
 
+glslc fullscreen.vert -o fullscreen.vert.spv
+if %ERRORLEVEL% NEQ 0 (
+    echo ERROR: Failed to compile fullscreen.vert
+    pause
+    exit /b 1
+)
+echo [OK] fullscreen.vert.spv
+
 echo.
 echo Compiling fragment shaders...
 glslc cube.frag -o cube.frag.spv
@@ -40,6 +48,38 @@ if %ERRORLEVEL% NEQ 0 (
     exit /b 1
 )
 echo [OK] shadow_cascade.frag.spv
+
+glslc bloom_bright.frag -o bloom_bright.frag.spv
+if %ERRORLEVEL% NEQ 0 (
+    echo ERROR: Failed to compile bloom_bright.frag
+    pause
+    exit /b 1
+)
+echo [OK] bloom_bright.frag.spv
+
+glslc bloom_blur.frag -o bloom_blur.frag.spv
+if %ERRORLEVEL% NEQ 0 (
+    echo ERROR: Failed to compile bloom_blur.frag
+    pause
+    exit /b 1
+)
+echo [OK] bloom_blur.frag.spv
+
+glslc bloom_composite.frag -o bloom_composite.frag.spv
+if %ERRORLEVEL% NEQ 0 (
+    echo ERROR: Failed to compile bloom_composite.frag
+    pause
+    exit /b 1
+)
+echo [OK] bloom_composite.frag.spv
+
+glslc bloom.frag -o bloom.frag.spv
+if %ERRORLEVEL% NEQ 0 (
+    echo ERROR: Failed to compile bloom.frag
+    pause
+    exit /b 1
+)
+echo [OK] bloom.frag.spv
 
 echo.
 echo ========================================

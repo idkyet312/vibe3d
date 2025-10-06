@@ -50,6 +50,17 @@ public:
     void renderMaterialPanel();
     void renderFPSCounter();
     
+    // Bloom controls
+    struct BloomControls {
+        bool enabled = true;
+        float strength = 0.15f;  // Increased for more visible bloom
+        float threshold = 1.0f;
+        bool valuesChanged = false;
+    };
+    
+    BloomControls& getBloomControls() { return bloomControls_; }
+    void renderBloomPanel();
+    
     // Handle window resize
     void onWindowResize();
 
@@ -57,6 +68,7 @@ private:
     VkDescriptorPool imguiPool_ = VK_NULL_HANDLE;
     bool initialized_ = false;
     MaterialControls controls_;
+    BloomControls bloomControls_;
     
     // Preset definitions
     struct Preset {

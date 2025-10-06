@@ -7,6 +7,7 @@
 #include "VulkanImage.h"
 #include "VulkanDescriptor.h"
 #include "ImGuiManager.h"
+#include "PostProcessManager.h"
 #include "modules/GeometryManager.h"
 #include <memory>
 #include <vector>
@@ -69,6 +70,14 @@ public:
     
     // Camera control for material updates
     void setCameraFrozen(bool frozen) noexcept { cameraFrozen_ = frozen; }
+    
+    // Bloom control (delegated to PostProcessManager)
+    void setBloomEnabled(bool enabled);
+    bool isBloomEnabled() const;
+    void setBloomStrength(float strength);
+    float getBloomStrength() const;
+    void setBloomThreshold(float threshold);
+    float getBloomThreshold() const;
 
 private:
     // Initialization helpers
@@ -127,6 +136,7 @@ private:
     // Modules
     std::unique_ptr<GeometryManager> geometryManager_;
     std::unique_ptr<ImGuiManager> imguiManager_;
+    std::unique_ptr<PostProcessManager> postProcessManager_;
     
     // Render pass and framebuffers
     VkRenderPass renderPass_ = VK_NULL_HANDLE;

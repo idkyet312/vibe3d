@@ -1,0 +1,50 @@
+===========================================
+  VIBE3D ENGINE - VULKAN FORWARD+ RENDERER
+===========================================
+
+CONTROLS:
+---------
+WASD   - Move camera
+Mouse  - Look around
+TAB    - Toggle camera freeze (for GUI interaction)
+Space  - Jump
+Click  - Shoot
+E      - Spawn objects
+M      - Cycle materials
+B      - Toggle shadow debug (Normal/Shadows/Cascades)
+ESC    - Exit
+
+MATERIAL CONTROLLER:
+-------------------
+Press TAB to freeze the camera and interact with the GUI.
+- Choose from 10 material presets
+- Adjust albedo color (RGB)
+- Control roughness and metallic properties
+- Set emissive glow (color and strength 0-100)
+- Adjust lighting (skylight, sun intensity, sun direction)
+
+SHADOW CONTROLS:
+---------------
+- Real-time shadow bias adjustment
+- 4 cascaded shadow maps for optimal quality
+- Debug modes to visualize shadows and cascades
+
+PERFORMANCE:
+-----------
+- VSync disabled for maximum FPS
+- 3 frames in flight
+- 2048x2048 shadow maps
+- 3x3 PCF filtering
+
+GPU: NVIDIA GeForce RTX 4060
+Architecture: Forward+ (Tiled Forward)
+Expected FPS: 2000-2700 FPS
+
+FEATURES:
+--------
+- Physically-based rendering (PBR)
+- Cascaded shadow mapping
+- Real-time emissive materials with floor glow
+- ACES tonemapping for HDR
+- ImGui embedded material controller
+- Distance-based floor glow effect
