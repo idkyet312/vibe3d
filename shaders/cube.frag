@@ -23,16 +23,20 @@ layout(set = 0, binding = 1) uniform ShadowUBO {
 
 layout(set = 0, binding = 2) uniform sampler2D shadowMaps[4]; // 4 individual shadow maps for cascades
 
+layout(push_constant) uniform PushConstants {
+    mat4 model;
+    int debugMode; // 0 = normal, 1 = show shadows, 2 = show cascades
+} pushConstants;
+
 const float PI = 3.14159265359;
 
-// PBR material properties (can be passed as uniforms or push constants later)
+// PBR material properties
 const float roughness = 0.5;
 const float metallic = 0.0;
-const vec3 F0_dielectric = vec3(0.04); // Base reflectivity for dielectrics
+const vec3 F0_dielectric = vec3(0.04);
 
 // === Cook-Torrance GGX Functions ===
 
-// GGX/Trowbridge-Reitz normal distribution function
 float DistributionGGX(vec3 N, vec3 H, float roughness) {
     float a = roughness * roughness;
     float a2 = a * a;
@@ -46,7 +50,6 @@ float DistributionGGX(vec3 N, vec3 H, float roughness) {
     return num / denom;
 }
 
-// Schlick-GGX geometry function (Smith's method)
 float GeometrySchlickGGX(float NdotV, float roughness) {
     float r = (roughness + 1.0);
     float k = (r * r) / 8.0;
@@ -66,17 +69,14 @@ float GeometrySmith(vec3 N, vec3 V, vec3 L, float roughness) {
     return ggx1 * ggx2;
 }
 
-// Fresnel-Schlick approximation
 vec3 fresnelSchlick(float cosTheta, vec3 F0) {
     return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
 }
 
-// === Disney/Burley Diffuse ===
 float DisneyDiffuse(float NdotV, float NdotL, float LdotH, float roughness) {
     float energyBias = mix(0.0, 0.5, roughness);
     float energyFactor = mix(1.0, 1.0 / 1.51, roughness);
     float fd90 = energyBias + 2.0 * LdotH * LdotH * roughness;
-    vec3 f0 = vec3(1.0);
     float lightScatter = (1.0 + (fd90 - 1.0) * pow(1.0 - NdotL, 5.0));
     float viewScatter = (1.0 + (fd90 - 1.0) * pow(1.0 - NdotV, 5.0));
     
@@ -85,7 +85,6 @@ float DisneyDiffuse(float NdotV, float NdotL, float LdotH, float roughness) {
 
 // === Cascaded Shadow Mapping ===
 
-// Select appropriate cascade based on view depth
 int selectCascadeIndex() {
     if (fragViewDepth < shadow.cascadeSplits.x) {
         return 0;
@@ -98,7 +97,6 @@ int selectCascadeIndex() {
     }
 }
 
-// PCF (Percentage Closer Filtering) for soft shadows
 float calculateShadowPCF(vec4 fragPosLight, int cascadeIndex, float bias) {
     // Perspective divide
     vec3 projCoords = fragPosLight.xyz / fragPosLight.w;
@@ -112,14 +110,7 @@ float calculateShadowPCF(vec4 fragPosLight, int cascadeIndex, float bias) {
         return 1.0;
     }
     
-    // Get current fragment depth
     float currentDepth = projCoords.z;
-    
-    // Sample shadow map - simple comparison without PCF for now
-    float closestDepth = texture(shadowMaps[cascadeIndex], projCoords.xy).r;
-    
-    // Simple shadow comparison
-    float shadow = (currentDepth - bias) > closestDepth ? 0.0 : 1.0;
     
     // PCF for smoother shadows
     float shadowSum = 0.0;
@@ -133,141 +124,85 @@ float calculateShadowPCF(vec4 fragPosLight, int cascadeIndex, float bias) {
         }
     }
     
-    return shadowSum / 9.0; // Average of 9 samples
+    return shadowSum / 9.0;
 }
 
-// Calculate shadow with cascade selection
 float calculateCascadedShadow(vec3 N, vec3 L) {
     int cascadeIndex = selectCascadeIndex();
     
-    // Strong bias to prevent shadow acne
-    float bias = max(0.01 * (1.0 - dot(N, L)), 0.005);
+    // Reduced bias for better shadow visibility
+    float bias = max(0.002 * (1.0 - dot(N, L)), 0.0005);
     
     return calculateShadowPCF(fragPosLightSpace[cascadeIndex], cascadeIndex, bias);
 }
 
 void main() {
-    // Material base color (albedo)
     vec3 albedo = fragColor;
-    
-    // Setup vectors
     vec3 N = normalize(fragNormal);
     vec3 V = normalize(camera.position.xyz - fragPos);
     
-    // Calculate reflectance at normal incidence
     vec3 F0 = F0_dielectric;
     F0 = mix(F0, albedo, metallic);
     
-    // Reflectance equation
     vec3 Lo = vec3(0.0);
     
-    // === Directional Light with Cascaded Shadows ===
-    {
-        vec3 L = normalize(-shadow.lightDirection);
-        vec3 H = normalize(V + L);
-        
-        // Strong sun intensity for visible shadows
-        vec3 radiance = vec3(15.0); // Increased sun intensity
-        
-        // Cook-Torrance BRDF
-        float NDF = DistributionGGX(N, H, roughness);
-        float G = GeometrySmith(N, V, L, roughness);
-        vec3 F = fresnelSchlick(max(dot(H, V), 0.0), F0);
-        
-        vec3 kS = F;
-        vec3 kD = vec3(1.0) - kS;
-        kD *= 1.0 - metallic;
-        
-        vec3 numerator = NDF * G * F;
-        float denominator = 4.0 * max(dot(N, V), 0.0) * max(dot(N, L), 0.0) + 0.0001;
-        vec3 specular = numerator / denominator;
-        
-        // Disney/Burley diffuse
-        float NdotL = max(dot(N, L), 0.0);
-        float NdotV = max(dot(N, V), 0.0);
-        float LdotH = max(dot(L, H), 0.0);
-        float diffuseFactor = DisneyDiffuse(NdotV, NdotL, LdotH, roughness);
-        vec3 diffuse = (kD * albedo / PI) * diffuseFactor;
-        
-        // Calculate shadow
-        float shadowFactor = calculateCascadedShadow(N, L);
-        
-        // Add directional light contribution with shadow
-        Lo += (diffuse + specular) * radiance * NdotL * shadowFactor;
+    // === Directional Light from Above ===
+    vec3 L = normalize(-shadow.lightDirection);
+    vec3 H = normalize(V + L);
+    
+    // Bright directional light
+    vec3 radiance = vec3(4.0);
+    
+    float NDF = DistributionGGX(N, H, roughness);
+    float G = GeometrySmith(N, V, L, roughness);
+    vec3 F = fresnelSchlick(max(dot(H, V), 0.0), F0);
+    
+    vec3 kS = F;
+    vec3 kD = vec3(1.0) - kS;
+    kD *= 1.0 - metallic;
+    
+    vec3 numerator = NDF * G * F;
+    float denominator = 4.0 * max(dot(N, V), 0.0) * max(dot(N, L), 0.0) + 0.0001;
+    vec3 specular = numerator / denominator;
+    
+    float NdotL = max(dot(N, L), 0.0);
+    float NdotV_val = max(dot(N, V), 0.0);
+    float LdotH = max(dot(L, H), 0.0);
+    float diffuseFactor = DisneyDiffuse(NdotV_val, NdotL, LdotH, roughness);
+    vec3 diffuse = (kD * albedo / PI) * diffuseFactor;
+    
+    // Calculate shadow
+    float shadowFactor = calculateCascadedShadow(N, L);
+    
+    // Debug modes (Press B to cycle: 0=normal, 1=shadows, 2=cascades)
+    if (pushConstants.debugMode == 1) {
+        // Show shadow factor as grayscale (black = shadow, white = lit)
+        outColor = vec4(vec3(shadowFactor), 1.0);
+        return;
+    } else if (pushConstants.debugMode == 2) {
+        // Show cascade levels
+        int cascadeIndex = selectCascadeIndex();
+        vec3 cascadeColor = vec3(0.0);
+        if (cascadeIndex == 0) cascadeColor = vec3(1.0, 0.0, 0.0);      // Red
+        else if (cascadeIndex == 1) cascadeColor = vec3(0.0, 1.0, 0.0); // Green
+        else if (cascadeIndex == 2) cascadeColor = vec3(0.0, 0.0, 1.0); // Blue
+        else cascadeColor = vec3(1.0, 1.0, 0.0);                        // Yellow
+        outColor = vec4(cascadeColor * 0.5 + albedo * 0.5, 1.0);
+        return;
     }
     
-    // === Point Lights (existing) ===
-    vec3 lightPositions[3];
-    vec3 lightColors[3];
+    // Normal rendering with shadows
+    Lo += (diffuse + specular) * radiance * NdotL * shadowFactor;
     
-    lightPositions[0] = vec3(5.0, 5.0, 5.0);
-    lightPositions[1] = vec3(-5.0, 5.0, -3.0);
-    lightPositions[2] = vec3(0.0, -5.0, 3.0);
-    
-    lightColors[0] = vec3(300.0, 300.0, 300.0); // Bright white
-    lightColors[1] = vec3(150.0, 150.0, 200.0); // Cool blue
-    lightColors[2] = vec3(100.0, 80.0, 60.0);   // Warm orange
-    
-    for(int i = 0; i < 3; ++i) {
-        // Calculate per-light radiance
-        vec3 L = normalize(lightPositions[i] - fragPos);
-        vec3 H = normalize(V + L);
-        float distance = length(lightPositions[i] - fragPos);
-        float attenuation = 1.0 / (distance * distance);
-        vec3 radiance = lightColors[i] * attenuation;
-        
-        // Cook-Torrance BRDF
-        float NDF = DistributionGGX(N, H, roughness);
-        float G = GeometrySmith(N, V, L, roughness);
-        vec3 F = fresnelSchlick(max(dot(H, V), 0.0), F0);
-        
-        vec3 kS = F;
-        vec3 kD = vec3(1.0) - kS;
-        kD *= 1.0 - metallic;
-        
-        vec3 numerator = NDF * G * F;
-        float denominator = 4.0 * max(dot(N, V), 0.0) * max(dot(N, L), 0.0) + 0.0001;
-        vec3 specular = numerator / denominator;
-        
-        // Disney/Burley diffuse
-        float NdotL = max(dot(N, L), 0.0);
-        float NdotV = max(dot(N, V), 0.0);
-        float LdotH = max(dot(L, H), 0.0);
-        float diffuseFactor = DisneyDiffuse(NdotV, NdotL, LdotH, roughness);
-        vec3 diffuse = (kD * albedo / PI) * diffuseFactor;
-        
-        // Add to outgoing radiance Lo
-        Lo += (diffuse + specular) * radiance * NdotL;
-    }
-    
-    // Ambient lighting (reduced for dramatic shadows)
-    vec3 ambient = vec3(0.01) * albedo; // Very dark ambient
+    // Very low ambient for maximum shadow contrast
+    vec3 ambient = vec3(0.005) * albedo;
     vec3 color = ambient + Lo;
     
-    // HDR tonemapping (Reinhard)
+    // HDR tonemapping
     color = color / (color + vec3(1.0));
     
     // Gamma correction
     color = pow(color, vec3(1.0/2.2));
-    
-    // Debug: Visualize shadows directly
-    int cascadeIndex = selectCascadeIndex();
-    float shadowValue = calculateCascadedShadow(N, normalize(-shadow.lightDirection));
-    
-    // Show cascade colors modulated by shadow
-    vec3 cascadeColors[4] = vec3[](
-        vec3(1.0, 0.2, 0.2),  // Red - cascade 0
-        vec3(0.2, 1.0, 0.2),  // Green - cascade 1  
-        vec3(0.2, 0.2, 1.0),  // Blue - cascade 2
-        vec3(1.0, 1.0, 0.2)   // Yellow - cascade 3
-    );
-    
-    // Debug mode: Show cascades with shadow darkening
-    // Darker areas = shadowed, Bright colors = lit
-    vec3 debugColor = cascadeColors[cascadeIndex] * shadowValue;
-    
-    // Mix 50% debug visualization with actual PBR rendering
-    color = mix(color, debugColor, 0.5);
     
     outColor = vec4(color, 1.0);
 }

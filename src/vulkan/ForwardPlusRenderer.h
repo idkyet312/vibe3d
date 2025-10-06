@@ -6,6 +6,7 @@
 #include "VulkanBuffer.h"
 #include "VulkanImage.h"
 #include "VulkanDescriptor.h"
+#include "modules/GeometryManager.h"
 #include <memory>
 #include <vector>
 #include <array>
@@ -60,6 +61,10 @@ public:
 
     // Resize handling
     void onWindowResize(uint32_t width, uint32_t height);
+    
+    // Debug mode control
+    void cycleShadowDebugMode();  // NEW
+    int getShadowDebugMode() const noexcept { return shadowDebugMode_; }  // NEW
 
 private:
     // Initialization helpers
@@ -114,6 +119,9 @@ private:
     std::unique_ptr<VulkanDevice> device_;
     std::unique_ptr<VulkanSwapChain> swapChain_;
     
+    // Modules
+    std::unique_ptr<GeometryManager> geometryManager_;
+    
     // Render pass and framebuffers
     VkRenderPass renderPass_ = VK_NULL_HANDLE;
     VkRenderPass depthPrepass_ = VK_NULL_HANDLE;
@@ -137,7 +145,7 @@ private:
     
     // Cascade split distances
     std::array<float, NUM_CASCADES> cascadeSplits_{};
-    glm::vec3 lightDirection_ = glm::normalize(glm::vec3(-1.0f, -2.0f, -1.0f)); // Strong directional light
+    glm::vec3 lightDirection_ = glm::vec3(0.0f, -1.0f, 0.0f); // Directional light from directly above (like sun/point light)
     
     // MSAA resources
     std::unique_ptr<VulkanImage> colorImage_;
@@ -189,6 +197,10 @@ private:
     
     // Mesh data
     uint32_t indexCount_ = 0;
+    
+    // Debug mode
+    int shadowDebugMode_ = 0;  // 0 = normal, 1 = show shadows, 2 = show cascades  // NEW
 };
 
 } // namespace vibe::vk
+

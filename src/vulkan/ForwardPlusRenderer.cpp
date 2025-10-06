@@ -1,4 +1,5 @@
 #include "ForwardPlusRenderer.h"
+#include "modules/GeometryManager.h"
 #include <GLFW/glfw3.h>
 #include <glm/gtc/matrix_transform.hpp>
 #include <iostream>
@@ -572,11 +573,11 @@ bool ForwardPlusRenderer::createPipeline() {
         .pAttachments = &colorBlendAttachment
     };
     
-    // Push constants for model matrix
+    // Push constants for model matrix and debug mode
     VkPushConstantRange pushConstantRange{
-        .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+        .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
         .offset = 0,
-        .size = sizeof(glm::mat4)
+        .size = sizeof(PushConstants)
     };
     
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{
@@ -807,87 +808,15 @@ VkShaderModule ForwardPlusRenderer::createShaderModule(const std::vector<char>& 
 }
 
 bool ForwardPlusRenderer::createCubeGeometry() {
-    // Cube vertices with proper normals for each face
-    std::vector<Vertex> vertices = {
-        // Front face (Z+) - Red
-        {{-0.5f, -0.5f,  0.5f}, { 0.0f,  0.0f,  1.0f}, {0.0f, 0.0f}, {1.0f, 0.2f, 0.2f}},
-        {{ 0.5f, -0.5f,  0.5f}, { 0.0f,  0.0f,  1.0f}, {1.0f, 0.0f}, {1.0f, 0.2f, 0.2f}},
-        {{ 0.5f,  0.5f,  0.5f}, { 0.0f,  0.0f,  1.0f}, {1.0f, 1.0f}, {1.0f, 0.2f, 0.2f}},
-        {{-0.5f,  0.5f,  0.5f}, { 0.0f,  0.0f,  1.0f}, {0.0f, 1.0f}, {1.0f, 0.2f, 0.2f}},
-        
-        // Back face (Z-) - Green
-        {{ 0.5f, -0.5f, -0.5f}, { 0.0f,  0.0f, -1.0f}, {0.0f, 0.0f}, {0.2f, 1.0f, 0.2f}},
-        {{-0.5f, -0.5f, -0.5f}, { 0.0f,  0.0f, -1.0f}, {1.0f, 0.0f}, {0.2f, 1.0f, 0.2f}},
-        {{-0.5f,  0.5f, -0.5f}, { 0.0f,  0.0f, -1.0f}, {1.0f, 1.0f}, {0.2f, 1.0f, 0.2f}},
-        {{ 0.5f,  0.5f, -0.5f}, { 0.0f,  0.0f, -1.0f}, {0.0f, 1.0f}, {0.2f, 1.0f, 0.2f}},
-        
-        // Top face (Y+) - Blue
-        {{-0.5f,  0.5f,  0.5f}, { 0.0f,  1.0f,  0.0f}, {0.0f, 0.0f}, {0.2f, 0.2f, 1.0f}},
-        {{ 0.5f,  0.5f,  0.5f}, { 0.0f,  1.0f,  0.0f}, {1.0f, 0.0f}, {0.2f, 0.2f, 1.0f}},
-        {{ 0.5f,  0.5f, -0.5f}, { 0.0f,  1.0f,  0.0f}, {1.0f, 1.0f}, {0.2f, 0.2f, 1.0f}},
-        {{-0.5f,  0.5f, -0.5f}, { 0.0f,  1.0f,  0.0f}, {0.0f, 1.0f}, {0.2f, 0.2f, 1.0f}},
-        
-        // Bottom face (Y-) - Yellow
-        {{-0.5f, -0.5f, -0.5f}, { 0.0f, -1.0f,  0.0f}, {0.0f, 0.0f}, {1.0f, 1.0f, 0.2f}},
-        {{ 0.5f, -0.5f, -0.5f}, { 0.0f, -1.0f,  0.0f}, {1.0f, 0.0f}, {1.0f, 1.0f, 0.2f}},
-        {{ 0.5f, -0.5f,  0.5f}, { 0.0f, -1.0f,  0.0f}, {1.0f, 1.0f}, {1.0f, 1.0f, 0.2f}},
-        {{-0.5f, -0.5f,  0.5f}, { 0.0f, -1.0f,  0.0f}, {0.0f, 1.0f}, {1.0f, 1.0f, 0.2f}},
-        
-        // Right face (X+) - Magenta
-        {{ 0.5f, -0.5f,  0.5f}, { 1.0f,  0.0f,  0.0f}, {0.0f, 0.0f}, {1.0f, 0.2f, 1.0f}},
-        {{ 0.5f, -0.5f, -0.5f}, { 1.0f,  0.0f,  0.0f}, {1.0f, 0.0f}, {1.0f, 0.2f, 1.0f}},
-        {{ 0.5f,  0.5f, -0.5f}, { 1.0f,  0.0f,  0.0f}, {1.0f, 1.0f}, {1.0f, 0.2f, 1.0f}},
-        {{ 0.5f,  0.5f,  0.5f}, { 1.0f,  0.0f,  0.0f}, {0.0f, 1.0f}, {1.0f, 0.2f, 1.0f}},
-        
-        // Left face (X-) - Cyan
-        {{-0.5f, -0.5f, -0.5f}, {-1.0f,  0.0f,  0.0f}, {0.0f, 0.0f}, {0.2f, 1.0f, 1.0f}},
-        {{-0.5f, -0.5f,  0.5f}, {-1.0f,  0.0f,  0.0f}, {1.0f, 0.0f}, {0.2f, 1.0f, 1.0f}},
-        {{-0.5f,  0.5f,  0.5f}, {-1.0f,  0.0f,  0.0f}, {1.0f, 1.0f}, {0.2f, 1.0f, 1.0f}},
-        {{-0.5f,  0.5f, -0.5f}, {-1.0f,  0.0f,  0.0f}, {0.0f, 1.0f}, {0.2f, 1.0f, 1.0f}},
-        
-        // Floor plane (large, below the cube) - Gray with grid pattern
-        {{-5.0f, -2.0f,  5.0f}, { 0.0f,  1.0f,  0.0f}, {0.0f, 0.0f}, {0.3f, 0.3f, 0.35f}},
-        {{ 5.0f, -2.0f,  5.0f}, { 0.0f,  1.0f,  0.0f}, {5.0f, 0.0f}, {0.3f, 0.3f, 0.35f}},
-        {{ 5.0f, -2.0f, -5.0f}, { 0.0f,  1.0f,  0.0f}, {5.0f, 5.0f}, {0.3f, 0.3f, 0.35f}},
-        {{-5.0f, -2.0f, -5.0f}, { 0.0f,  1.0f,  0.0f}, {0.0f, 5.0f}, {0.3f, 0.3f, 0.35f}}
-    };
+    // Initialize geometry manager
+    geometryManager_ = std::make_unique<GeometryManager>(*device_);
     
-    // Corrected winding order for proper culling (counter-clockwise from outside)
-    std::vector<uint32_t> indices = {
-        0,  1,  2,  2,  3,  0,   // Front
-        4,  5,  6,  6,  7,  4,   // Back
-        8,  9,  10, 10, 11, 8,   // Top
-        12, 13, 14, 14, 15, 12,  // Bottom
-        16, 17, 18, 18, 19, 16,  // Right
-        20, 21, 22, 22, 23, 20,  // Left
-        24, 25, 26, 26, 27, 24   // Floor
-    };
-    
-    indexCount_ = static_cast<uint32_t>(indices.size());
-    
-    // Create vertex buffer
-    VkDeviceSize vertexBufferSize = sizeof(vertices[0]) * vertices.size();
+    // Create vertex and index buffers
     vertexBuffer_ = std::make_unique<VulkanBuffer>();
-    if (!vertexBuffer_->create(*device_, vertexBufferSize,
-                               VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                               VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | 
-                               VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
-        return false;
-    }
-    vertexBuffer_->copyFrom(vertices.data(), vertexBufferSize);
-    
-    // Create index buffer
-    VkDeviceSize indexBufferSize = sizeof(indices[0]) * indices.size();
     indexBuffer_ = std::make_unique<VulkanBuffer>();
-    if (!indexBuffer_->create(*device_, indexBufferSize,
-                              VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-                              VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | 
-                              VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
-        return false;
-    }
-    indexBuffer_->copyFrom(indices.data(), indexBufferSize);
     
-    return true;
+    // Use GeometryManager to create cube geometry
+    return geometryManager_->createCubeGeometry(*vertexBuffer_, *indexBuffer_, indexCount_);
 }
 
 bool ForwardPlusRenderer::createSyncObjects() {
@@ -1013,9 +942,15 @@ void ForwardPlusRenderer::renderScene(const CameraUBO& camera, std::span<const P
     cubeModel = glm::rotate(cubeModel, time * glm::radians(30.0f), glm::vec3(0.0f, 1.0f, 0.0f));
     cubeModel = glm::rotate(cubeModel, time * glm::radians(20.0f), glm::vec3(1.0f, 0.0f, 0.0f));
     
-    // Push model matrix for cube
-    vkCmdPushConstants(cmd, forwardPipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT, 
-                      0, sizeof(glm::mat4), &cubeModel);
+    // Push model matrix and debug mode for cube
+    PushConstants pushConst{
+        .model = cubeModel,
+        .debugMode = shadowDebugMode_,
+        .padding = {0.0f, 0.0f, 0.0f}
+    };
+    vkCmdPushConstants(cmd, forwardPipelineLayout_, 
+                      VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 
+                      0, sizeof(PushConstants), &pushConst);
     
     // Draw cube (36 indices for 6 faces)
     vkCmdDrawIndexed(cmd, 36, 1, 0, 0, 0);
@@ -1023,9 +958,11 @@ void ForwardPlusRenderer::renderScene(const CameraUBO& camera, std::span<const P
     // Draw stationary floor
     glm::mat4 floorModel = glm::mat4(1.0f); // Identity - no transformation
     
-    // Push model matrix for floor
-    vkCmdPushConstants(cmd, forwardPipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT, 
-                      0, sizeof(glm::mat4), &floorModel);
+    // Push model matrix and debug mode for floor
+    pushConst.model = floorModel;
+    vkCmdPushConstants(cmd, forwardPipelineLayout_, 
+                      VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 
+                      0, sizeof(PushConstants), &pushConst);
     
     // Draw floor (6 indices starting at index 36)
     vkCmdDrawIndexed(cmd, 6, 1, 36, 0, 0);
@@ -1073,6 +1010,13 @@ void ForwardPlusRenderer::onWindowResize(uint32_t width, uint32_t height) {
     
     numTilesX_ = calculateNumTiles(width);
     numTilesY_ = calculateNumTiles(height);
+}
+
+void ForwardPlusRenderer::cycleShadowDebugMode() {
+    shadowDebugMode_ = (shadowDebugMode_ + 1) % 3;
+    
+    const char* modes[] = {"Normal", "Shadow Factor", "Cascade Levels"};
+    std::cout << "==> Shadow Debug Mode: " << modes[shadowDebugMode_] << " (mode=" << shadowDebugMode_ << ")" << std::endl;
 }
 
 VkFormat ForwardPlusRenderer::findDepthFormat() const {
@@ -1225,7 +1169,7 @@ bool ForwardPlusRenderer::createShadowSampler() {
 
 void ForwardPlusRenderer::calculateCascadeSplits() {
     float nearPlane = 0.1f;
-    float farPlane = 200.0f;  // Extended far plane for larger coverage
+    float farPlane = 50.0f;  // Reduced from 200m to 50m for tighter shadow coverage
     float range = farPlane - nearPlane;
     float ratio = farPlane / nearPlane;
     
@@ -1234,15 +1178,21 @@ void ForwardPlusRenderer::calculateCascadeSplits() {
         float p = (i + 1) / static_cast<float>(NUM_CASCADES);
         float log = nearPlane * std::pow(ratio, p);
         float uniform = nearPlane + range * p;
-        float d = 0.90f * log + 0.10f * uniform; // More logarithmic distribution
+        float d = 0.95f * log + 0.05f * uniform; // Even more logarithmic for tighter near cascades
         cascadeSplits_[i] = (d - nearPlane) / range;
     }
     
     // Convert to actual distances
-    cascadeSplits_[0] *= farPlane; // First split
-    cascadeSplits_[1] *= farPlane; // Second split
-    cascadeSplits_[2] *= farPlane; // Third split
-    cascadeSplits_[3] = farPlane;  // Far plane
+    cascadeSplits_[0] *= farPlane; // First split  (~3-5m)
+    cascadeSplits_[1] *= farPlane; // Second split (~8-12m)
+    cascadeSplits_[2] *= farPlane; // Third split  (~18-25m)
+    cascadeSplits_[3] = farPlane;  // Far plane    (50m)
+    
+    std::cout << "Shadow Cascade Splits: " 
+              << cascadeSplits_[0] << "m, " 
+              << cascadeSplits_[1] << "m, " 
+              << cascadeSplits_[2] << "m, "
+              << cascadeSplits_[3] << "m" << std::endl;
 }
 
 glm::mat4 ForwardPlusRenderer::calculateLightSpaceMatrix(float nearPlane, float farPlane) {

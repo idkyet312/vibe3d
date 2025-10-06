@@ -1,6 +1,7 @@
 #include "InputManager.h"
 #include <glm/gtc/matrix_transform.hpp>
 #include <cmath>
+#include <iostream> // For std::cout
 
 InputManager* InputManager::instance = nullptr;
 
@@ -14,6 +15,7 @@ InputManager::InputManager()
     , cameraSpeed(6.5f)
     , materialKeyPressed(false)
     , raytracingKeyPressed(false)
+    , shadowDebugKeyPressed(false)
 {
     instance = this;
 }
@@ -74,6 +76,18 @@ bool InputManager::shouldToggleRaytracing(GLFWwindow* window) {
     }
     if (glfwGetKey(window, GLFW_KEY_R) == GLFW_RELEASE) {
         raytracingKeyPressed = false;
+    }
+    return false;
+}
+
+bool InputManager::shouldToggleShadowDebug(GLFWwindow* window) {
+    if (glfwGetKey(window, GLFW_KEY_B) == GLFW_PRESS && !shadowDebugKeyPressed) {
+        shadowDebugKeyPressed = true;
+        std::cout << "[DEBUG] B key pressed - toggling shadow debug" << std::endl;
+        return true;
+    }
+    if (glfwGetKey(window, GLFW_KEY_B) == GLFW_RELEASE) {
+        shadowDebugKeyPressed = false;
     }
     return false;
 }

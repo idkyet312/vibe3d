@@ -124,6 +124,9 @@ int main() {
     std::cout << "Click  - Shoot" << std::endl;
     std::cout << "E      - Spawn objects" << std::endl;
     std::cout << "M      - Cycle materials" << std::endl;
+    if (useVulkan) {
+        std::cout << "B      - Toggle shadow debug (Normal/Shadows/Cascades)" << std::endl;
+    }
     std::cout << "ESC    - Exit" << std::endl;
     std::cout << "\nRenderer: " << (useVulkan ? "Vulkan Forward+" : "OpenGL") << std::endl;
     std::cout << "====================================\n" << std::endl;
@@ -153,6 +156,14 @@ int main() {
 
         if (input->shouldExit(window)) {
             break;
+        }
+
+        // Check for shadow debug toggle (B key) - Vulkan only
+        if (useVulkan && vulkanRenderer) {
+            if (input->shouldToggleShadowDebug(window)) {
+                std::cout << "[MAIN] Calling cycleShadowDebugMode()" << std::endl;
+                vulkanRenderer->cycleShadowDebugMode();
+            }
         }
 
         cameraPos += input->getCameraMovement(window, deltaTime);

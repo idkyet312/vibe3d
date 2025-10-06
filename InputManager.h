@@ -22,6 +22,7 @@ public:
     bool shouldSpawnCube(GLFWwindow* window) const;
     bool shouldCycleMaterial(GLFWwindow* window);
     bool shouldToggleRaytracing(GLFWwindow* window);
+    bool shouldToggleShadowDebug(GLFWwindow* window);
     bool shouldIncreaseExposure(GLFWwindow* window) const;
     bool shouldDecreaseExposure(GLFWwindow* window) const;
     bool shouldExit(GLFWwindow* window) const;
@@ -46,6 +47,7 @@ private:
     // Input state tracking
     bool materialKeyPressed;
     bool raytracingKeyPressed;
+    bool shadowDebugKeyPressed;
     
     // Static callback functions
     static void mouse_callback(GLFWwindow* window, double xpos, double ypos);

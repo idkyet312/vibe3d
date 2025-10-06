@@ -125,7 +125,8 @@ struct MaterialData {
 // Push constants
 struct PushConstants {
     alignas(16) glm::mat4 model;
-    alignas(4) uint32_t materialIndex;
+    alignas(4) int debugMode;  // 0 = normal, 1 = show shadows, 2 = show cascades
+    alignas(4) float padding[3];  // 3 floats for padding (12 bytes total, but each float is 4-byte aligned)
 };
 
 // Forward+ push constants for compute
