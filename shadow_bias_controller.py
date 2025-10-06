@@ -211,6 +211,9 @@ class ShadowBiasController(QMainWindow):
         }
         self.update_all_displays()
         self.save_config()
+        self.status_label.setText("Reset to default values successfully!")
+        self.status_label.setStyleSheet("padding: 10px; background-color: #90EE90;")
+        QTimer.singleShot(2000, lambda: self.status_label.setStyleSheet("padding: 10px; background-color: #e0e0e0;"))
 
 
 def main():
