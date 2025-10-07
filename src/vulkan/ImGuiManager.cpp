@@ -85,6 +85,12 @@ bool ImGuiManager::initialize(GLFWwindow* window, VkInstance instance, VkPhysica
     // Load saved configurations from disk
     loadConfigsFromDisk();
     
+    // Auto-load preset 1 on startup if it exists
+    if (savedConfigs_[0].hasData) {
+        loadConfig(0);  // Load slot 1 (index 0)
+        std::cout << "Auto-loaded preset 1 on startup" << std::endl;
+    }
+    
     initialized_ = true;
     return true;
 }
