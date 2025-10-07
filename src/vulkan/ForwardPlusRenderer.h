@@ -68,6 +68,9 @@ public:
     void cycleShadowDebugMode();  // NEW
     int getShadowDebugMode() const noexcept { return shadowDebugMode_; }  // NEW
     
+    // Screenshot/Export
+    bool exportScreenshot(const std::string& filename, uint32_t width, uint32_t height, bool addWatermark = false);
+    
     // Camera control for material updates
     void setCameraFrozen(bool frozen) noexcept { cameraFrozen_ = frozen; }
     
@@ -97,12 +100,15 @@ private:
     bool createShadowFramebuffers();
     bool createShadowPipeline();
     bool createShadowSampler();
-    void calculateCascadeSplits();
+    // void calculateCascadeSplits();  // BACKUP: Disabled for simple shadows
     void updateShadowUBO();
     void updateMaterialUBO();
-    void renderShadowCascades(VkCommandBuffer cmd);
-    glm::mat4 calculateLightSpaceMatrix(float nearPlane, float farPlane);
+    void renderShadowMap(VkCommandBuffer cmd);  // Renamed from renderShadowCascades
+    glm::mat4 calculateLightSpaceMatrix();  // Simplified signature
 
+    // Watermark rendering (private helper)
+    void renderWatermark(VkCommandBuffer cmd);
+    
     // Shader helpers
     std::vector<char> readShaderFile(const std::string& filename);
     VkShaderModule createShaderModule(const std::vector<char>& code);
@@ -148,20 +154,24 @@ private:
     std::unique_ptr<VulkanImage> depthImage_;
     VkImageView depthImageView_ = VK_NULL_HANDLE;
     
-    // Shadow mapping resources
-    static constexpr size_t NUM_CASCADES = 4;
+    // Shadow mapping resources - Simple single shadow map
     static constexpr uint32_t SHADOW_MAP_SIZE = 4096;
-    std::array<std::unique_ptr<VulkanImage>, NUM_CASCADES> shadowImages_;
-    std::array<VkImageView, NUM_CASCADES> shadowImageViews_{};
+    std::unique_ptr<VulkanImage> shadowImage_;  // Single shadow map
+    VkImageView shadowImageView_ = VK_NULL_HANDLE;
     VkSampler shadowSampler_ = VK_NULL_HANDLE;
     VkRenderPass shadowRenderPass_ = VK_NULL_HANDLE;
-    std::array<std::vector<VkFramebuffer>, NUM_CASCADES> shadowFramebuffers_;
+    std::vector<VkFramebuffer> shadowFramebuffers_;  // Single framebuffer
     VkPipelineLayout shadowPipelineLayout_ = VK_NULL_HANDLE;
     VkPipeline shadowPipeline_ = VK_NULL_HANDLE;
     
-    // Cascade split distances
-    std::array<float, NUM_CASCADES> cascadeSplits_{};
     glm::vec3 lightDirection_ = glm::vec3(-1.0f, -1.0f, -0.5f); // Strong angle for dramatic shadows
+    
+    // BACKUP: Cascaded shadow map system (disabled)
+    // static constexpr size_t NUM_CASCADES = 4;
+    // std::array<std::unique_ptr<VulkanImage>, NUM_CASCADES> shadowImages_;
+    // std::array<VkImageView, NUM_CASCADES> shadowImageViews_{};
+    // std::array<std::vector<VkFramebuffer>, NUM_CASCADES> shadowFramebuffers_;
+    // std::array<float, NUM_CASCADES> cascadeSplits_{};
     
     // MSAA resources
     std::unique_ptr<VulkanImage> colorImage_;
@@ -250,7 +260,7 @@ private:
     void loadMaterialConfig();
     
     // Debug mode
-    int shadowDebugMode_ = 0;  // 0 = normal, 1 = show shadows, 2 = show cascades  // NEW
+    int shadowDebugMode_ = 0;  // 0 = normal, 1 = show shadows only
     
     // Camera state for material updates
     bool cameraFrozen_ = false;

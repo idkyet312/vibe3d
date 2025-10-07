@@ -3,6 +3,8 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <iostream>
+#include <chrono>
+#include <sstream>
 
 #ifdef VIBE3D_VULKAN_SUPPORT
 #include "vulkan/VulkanRenderer.h"
@@ -182,6 +184,22 @@ int main() {
             if (input->shouldToggleShadowDebug(window)) {
                 std::cout << "[MAIN] Calling cycleShadowDebugMode()" << std::endl;
                 vulkanRenderer->cycleShadowDebugMode();
+            }
+            
+            // Check for screenshot (F12 key)
+            if (input->shouldTakeScreenshot(window)) {
+                // Generate timestamped filename
+                auto now = std::chrono::system_clock::now();
+                auto timestamp = std::chrono::system_clock::to_time_t(now);
+                std::stringstream ss;
+                ss << "screenshot_" << timestamp << ".png";
+                
+                // Get window size for screenshot resolution
+                int width, height;
+                glfwGetFramebufferSize(window, &width, &height);
+                
+                // Export screenshot (no watermark for now - add licensing later)
+                vulkanRenderer->exportScreenshot(ss.str(), width, height, false);
             }
         }
 

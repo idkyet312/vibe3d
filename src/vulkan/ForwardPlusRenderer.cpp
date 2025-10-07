@@ -8,6 +8,7 @@
 #include <cmath>
 #include <fstream>
 #include <limits>
+#include <stb_image_write.h>
 
 using json = nlohmann::json;
 
@@ -43,8 +44,8 @@ bool ForwardPlusRenderer::initialize(GLFWwindow* window) {
     lightGrid_.numTilesY = numTilesY_;
     lightGrid_.maxLightsPerTile = config_.maxLights;
     
-    // Calculate cascade splits for shadow mapping
-    calculateCascadeSplits();
+    // Single shadow map system (no cascades)
+    // calculateCascadeSplits(); // BACKUP: Cascade system
     
     if (!createDepthResources()) {
         std::cerr << "Failed to create depth resources" << std::endl;
@@ -207,6 +208,19 @@ void ForwardPlusRenderer::cleanup() {
             vkDestroySampler(device_->getDevice(), shadowSampler_, nullptr);
         }
         
+        // Single shadow map cleanup
+        if (shadowImageView_ != VK_NULL_HANDLE) {
+            vkDestroyImageView(device_->getDevice(), shadowImageView_, nullptr);
+        }
+        shadowImage_.reset();
+        
+        for (auto fb : shadowFramebuffers_) {
+            if (fb != VK_NULL_HANDLE) {
+                vkDestroyFramebuffer(device_->getDevice(), fb, nullptr);
+            }
+        }
+        
+        /* BACKUP: Cascade cleanup
         for (size_t i = 0; i < NUM_CASCADES; ++i) {
             if (shadowImageViews_[i] != VK_NULL_HANDLE) {
                 vkDestroyImageView(device_->getDevice(), shadowImageViews_[i], nullptr);
@@ -219,6 +233,7 @@ void ForwardPlusRenderer::cleanup() {
                 }
             }
         }
+        */
         
         if (shadowRenderPass_ != VK_NULL_HANDLE) {
             vkDestroyRenderPass(device_->getDevice(), shadowRenderPass_, nullptr);
@@ -425,7 +440,7 @@ bool ForwardPlusRenderer::createDescriptorSetLayouts() {
     VkDescriptorSetLayoutBinding shadowMapBinding{
         .binding = 3,
         .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-        .descriptorCount = static_cast<uint32_t>(NUM_CASCADES),
+        .descriptorCount = 1,  // Single shadow map
         .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
         .pImmutableSamplers = nullptr
     };
@@ -516,7 +531,14 @@ bool ForwardPlusRenderer::createBuffers() {
             .range = sizeof(MaterialUBO)
         };
         
-        // Shadow map image infos
+        // Single shadow map image info
+        VkDescriptorImageInfo shadowImageInfo{
+            .sampler = shadowSampler_,
+            .imageView = shadowImageView_,
+            .imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
+        };
+        
+        /* BACKUP: Cascade shadow map image infos
         std::array<VkDescriptorImageInfo, NUM_CASCADES> shadowImageInfos;
         for (size_t j = 0; j < NUM_CASCADES; ++j) {
             shadowImageInfos[j] = {
@@ -525,6 +547,7 @@ bool ForwardPlusRenderer::createBuffers() {
                 .imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
             };
         }
+        */
         
         std::array<VkWriteDescriptorSet, 4> descriptorWrites{};
         
@@ -563,9 +586,9 @@ bool ForwardPlusRenderer::createBuffers() {
             .dstSet = globalDescriptorSets_[i],
             .dstBinding = 3,
             .dstArrayElement = 0,
-            .descriptorCount = static_cast<uint32_t>(NUM_CASCADES),
+            .descriptorCount = 1,  // Single shadow map
             .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            .pImageInfo = shadowImageInfos.data()
+            .pImageInfo = &shadowImageInfo
         };
         
         vkUpdateDescriptorSets(device_->getDevice(), static_cast<uint32_t>(descriptorWrites.size()), 
@@ -1008,9 +1031,10 @@ void ForwardPlusRenderer::renderScene(const CameraUBO& camera, std::span<const P
         imguiManager_->beginFrame();
         imguiManager_->renderMaterialPanel();
         imguiManager_->renderBloomPanel();
+        imguiManager_->renderShadowPanel();  // Add shadow controls
         imguiManager_->renderFPSCounter();
         
-        // Only apply ImGui material values when camera is frozen (TAB toggled on)
+        // Only apply ImGui values when camera is frozen (TAB toggled on)
         auto& controls = imguiManager_->getMaterialControls();
         if (cameraFrozen_ && controls.valuesChanged) {
             materialConfig_.albedoR = controls.albedoR;
@@ -1036,7 +1060,19 @@ void ForwardPlusRenderer::renderScene(const CameraUBO& camera, std::span<const P
                 std::cos(pitchRad) * std::sin(yawRad)
             ));
             
+            std::cout << "[LIGHT] Direction updated: (" << lightDirection_.x << ", " 
+                      << lightDirection_.y << ", " << lightDirection_.z 
+                      << ") | Intensity: " << materialConfig_.lightIntensity << std::endl;
+            
             controls.valuesChanged = false;
+        }
+        
+        // Apply shadow controls
+        auto& shadowControls = imguiManager_->getShadowControls();
+        if (cameraFrozen_ && shadowControls.valuesChanged) {
+            shadowBiasConfig_.depthBiasConstant = shadowControls.depthBiasConstant;
+            std::cout << "[SHADOW] Updated depth bias: " << shadowBiasConfig_.depthBiasConstant << std::endl;
+            shadowControls.valuesChanged = false;
         }
         
         // Apply bloom controls via PostProcessManager
@@ -1070,8 +1106,8 @@ void ForwardPlusRenderer::renderScene(const CameraUBO& camera, std::span<const P
         return;
     }
     
-    // Render shadow cascades first
-    renderShadowCascades(cmd);
+    // Render shadow map first
+    renderShadowMap(cmd);
     
     // Clear values for color and depth
     std::array<VkClearValue, 2> clearValues{};
@@ -1231,7 +1267,36 @@ VkFormat ForwardPlusRenderer::findDepthFormat() const {
 bool ForwardPlusRenderer::createShadowResources() {
     VkFormat depthFormat = findDepthFormat();
     
-    // Create shadow map images for each cascade
+    // Create single shadow map image
+    shadowImage_ = std::make_unique<VulkanImage>();
+    if (!shadowImage_->create(*device_, 
+                              4096,  // SHADOW_MAP_SIZE
+                              4096,
+                              depthFormat,
+                              VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT)) {
+        return false;
+    }
+    
+    // Create image view for shadow map
+    VkImageViewCreateInfo viewInfo{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+        .image = shadowImage_->getImage(),
+        .viewType = VK_IMAGE_VIEW_TYPE_2D,
+        .format = depthFormat,
+        .subresourceRange = {
+            .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
+            .baseMipLevel = 0,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = 1
+        }
+    };
+    
+    if (vkCreateImageView(device_->getDevice(), &viewInfo, nullptr, &shadowImageView_) != VK_SUCCESS) {
+        return false;
+    }
+    
+    /* BACKUP: Cascade shadow resources
     for (size_t i = 0; i < NUM_CASCADES; ++i) {
         shadowImages_[i] = std::make_unique<VulkanImage>();
         if (!shadowImages_[i]->create(*device_, 
@@ -1242,7 +1307,6 @@ bool ForwardPlusRenderer::createShadowResources() {
             return false;
         }
         
-        // Create image view for this cascade
         VkImageViewCreateInfo viewInfo{
             .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
             .image = shadowImages_[i]->getImage(),
@@ -1261,6 +1325,7 @@ bool ForwardPlusRenderer::createShadowResources() {
             return false;
         }
     }
+    */
     
     return true;
 }
@@ -1311,6 +1376,25 @@ bool ForwardPlusRenderer::createShadowRenderPass() {
 }
 
 bool ForwardPlusRenderer::createShadowFramebuffers() {
+    // Create single shadow framebuffer
+    VkFramebufferCreateInfo framebufferInfo{
+        .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+        .renderPass = shadowRenderPass_,
+        .attachmentCount = 1,
+        .pAttachments = &shadowImageView_,
+        .width = 4096,  // SHADOW_MAP_SIZE
+        .height = 4096,
+        .layers = 1
+    };
+    
+    VkFramebuffer framebuffer;
+    if (vkCreateFramebuffer(device_->getDevice(), &framebufferInfo, nullptr, 
+                           &framebuffer) != VK_SUCCESS) {
+        return false;
+    }
+    shadowFramebuffers_.push_back(framebuffer);
+    
+    /* BACKUP: Cascade framebuffers
     for (size_t i = 0; i < NUM_CASCADES; ++i) {
         VkFramebufferCreateInfo framebufferInfo{
             .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
@@ -1329,6 +1413,7 @@ bool ForwardPlusRenderer::createShadowFramebuffers() {
         }
         shadowFramebuffers_[i].push_back(framebuffer);
     }
+    */
     
     return true;
 }
@@ -1356,6 +1441,7 @@ bool ForwardPlusRenderer::createShadowSampler() {
     return vkCreateSampler(device_->getDevice(), &samplerInfo, nullptr, &shadowSampler_) == VK_SUCCESS;
 }
 
+/* BACKUP: Cascade split calculation
 void ForwardPlusRenderer::calculateCascadeSplits() {
     float nearPlane = 0.1f;
     float farPlane = 50.0f;  // Reduced from 200m to 50m for tighter shadow coverage
@@ -1383,33 +1469,55 @@ void ForwardPlusRenderer::calculateCascadeSplits() {
               << cascadeSplits_[2] << "m, "
               << cascadeSplits_[3] << "m" << std::endl;
 }
+*/
 
+/* BACKUP: Cascade light space matrix calculation
 glm::mat4 ForwardPlusRenderer::calculateLightSpaceMatrix(float nearPlane, float farPlane) {
-    // Get camera frustum corners in VIEW space first, then transform to WORLD space
     glm::mat4 proj = glm::perspective(glm::radians(45.0f), 
                                       static_cast<float>(config_.width) / config_.height,
                                       nearPlane, farPlane);
     
-    // We need the inverse of projection-view to get world space corners
-    // But we're calculating based on projection only, which is wrong!
-    // The shadows need to account for the actual camera position
-    
-    // For now, use a simpler approach: tight orthographic projection around scene
     glm::vec3 lightPos = glm::normalize(-lightDirection_) * 10.0f;
     glm::mat4 lightView = glm::lookAt(lightPos, glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
     
-    // Create tight orthographic projection for the scene bounds
-    // Scene is roughly -5 to +5 in X/Z, -2 to +2 in Y
-    float orthoSize = 15.0f; // Cover the whole scene
+    float orthoSize = 15.0f;
     glm::mat4 lightProjection = glm::ortho(
         -orthoSize, orthoSize,
         -orthoSize, orthoSize,
-        -orthoSize, orthoSize * 2.0f  // Extended depth range
+        -orthoSize, orthoSize * 2.0f
+    );
+    
+    return lightProjection * lightView;
+}
+*/
+
+glm::mat4 ForwardPlusRenderer::calculateLightSpaceMatrix() {
+    // Simple orthographic shadow map covering the whole scene
+    glm::vec3 lightPos = glm::normalize(-lightDirection_) * 20.0f;
+    glm::mat4 lightView = glm::lookAt(lightPos, glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+    
+    // Create orthographic projection for the scene
+    float orthoSize = 20.0f; // Cover more area for better shadows
+    glm::mat4 lightProjection = glm::ortho(
+        -orthoSize, orthoSize,
+        -orthoSize, orthoSize,
+        0.1f, orthoSize * 3.0f  // Near and far planes
     );
     
     return lightProjection * lightView;
 }
 
+void ForwardPlusRenderer::updateShadowUBO() {
+    ShadowUBO shadowUBO{};
+    
+    // Single light space matrix
+    shadowUBO.lightSpaceMatrix = calculateLightSpaceMatrix();
+    shadowUBO.depthBiasConstant = shadowBiasConfig_.depthBiasConstant;
+    
+    shadowBuffers_[currentFrame_]->copyFrom(&shadowUBO, sizeof(ShadowUBO));
+}
+
+/* BACKUP: Cascaded shadow update (disabled)
 void ForwardPlusRenderer::updateShadowUBO() {
     ShadowUBO shadowUBO{};
     
@@ -1432,6 +1540,7 @@ void ForwardPlusRenderer::updateShadowUBO() {
     
     shadowBuffers_[currentFrame_]->copyFrom(&shadowUBO, sizeof(ShadowUBO));
 }
+*/ // END BACKUP
 
 void ForwardPlusRenderer::updateMaterialUBO() {
     // Material config is now updated directly from ImGui in renderScene()
@@ -1451,8 +1560,80 @@ void ForwardPlusRenderer::updateMaterialUBO() {
     materialBuffers_[currentFrame_]->copyFrom(&materialUBO, sizeof(MaterialUBO));
 }
 
+void ForwardPlusRenderer::renderShadowMap(VkCommandBuffer cmd) {
+    // Render scene geometry from light's perspective (single shadow map)
+    VkClearValue clearValue{};
+    clearValue.depthStencil = {1.0f, 0};
+    
+    VkRenderPassBeginInfo renderPassInfo{
+        .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+        .renderPass = shadowRenderPass_,
+        .framebuffer = shadowFramebuffers_[0],
+        .renderArea = {
+            .offset = {0, 0},
+            .extent = {4096, 4096}  // SHADOW_MAP_SIZE
+        },
+        .clearValueCount = 1,
+        .pClearValues = &clearValue
+    };
+    
+    vkCmdBeginRenderPass(cmd, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+    
+    // Bind shadow pipeline
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadowPipeline_);
+    
+    // Set dynamic depth bias from live controls
+    vkCmdSetDepthBias(cmd, 
+                     shadowBiasConfig_.depthBiasConstant,
+                     0.0f,  // depthBiasClamp
+                     0.0f); // depthBiasSlope (not used for simple shadows)
+    
+    // Bind vertex and index buffers
+    VkBuffer vertexBuffers[] = {vertexBuffer_->getBuffer()};
+    VkDeviceSize offsets[] = {0};
+    vkCmdBindVertexBuffers(cmd, 0, 1, vertexBuffers, offsets);
+    vkCmdBindIndexBuffer(cmd, indexBuffer_->getBuffer(), 0, VK_INDEX_TYPE_UINT32);
+    
+    // Get light space matrix for shadow map
+    glm::mat4 lightSpaceMatrix = calculateLightSpaceMatrix();
+    
+    float time = static_cast<float>(glfwGetTime());
+    
+    // Render rotating model/cube
+    glm::mat4 cubeModel = glm::mat4(1.0f);
+    cubeModel = glm::translate(cubeModel, glm::vec3(0.0f, 0.5f, 0.0f));
+    cubeModel = glm::rotate(cubeModel, time * glm::radians(30.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+    
+    // Push model and light space matrices
+    struct {
+        glm::mat4 model;
+        glm::mat4 lightSpace;
+    } pushConstants;
+    
+    pushConstants.model = cubeModel;
+    pushConstants.lightSpace = lightSpaceMatrix;
+    
+    vkCmdPushConstants(cmd, shadowPipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT, 
+                      0, sizeof(pushConstants), &pushConstants);
+    
+    // Draw cube (36 indices for 6 faces)
+    vkCmdDrawIndexed(cmd, 36, 1, 0, 0, 0);
+    
+    // Render floor
+    glm::mat4 floorModel = glm::mat4(1.0f);
+    pushConstants.model = floorModel;
+    
+    vkCmdPushConstants(cmd, shadowPipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT, 
+                      0, sizeof(pushConstants), &pushConstants);
+    
+    // Draw floor (6 indices starting at index 36)
+    vkCmdDrawIndexed(cmd, 6, 1, 36, 0, 0);
+    
+    vkCmdEndRenderPass(cmd);
+}
+
+/* BACKUP: Cascade shadow rendering
 void ForwardPlusRenderer::renderShadowCascades(VkCommandBuffer cmd) {
-    // Render scene geometry from light's perspective for each cascade
     for (size_t i = 0; i < NUM_CASCADES; ++i) {
         VkClearValue clearValue{};
         clearValue.depthStencil = {1.0f, 0};
@@ -1470,34 +1651,26 @@ void ForwardPlusRenderer::renderShadowCascades(VkCommandBuffer cmd) {
         };
         
         vkCmdBeginRenderPass(cmd, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
-        
-        // Bind shadow pipeline
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadowPipeline_);
         
-        // Set dynamic depth bias from loaded config
         vkCmdSetDepthBias(cmd, 
                          shadowBiasConfig_.depthBiasConstant,
-                         0.0f,  // depthBiasClamp
+                         0.0f,
                          shadowBiasConfig_.depthBiasSlope);
         
-        // Bind vertex and index buffers
         VkBuffer vertexBuffers[] = {vertexBuffer_->getBuffer()};
         VkDeviceSize offsets[] = {0};
         vkCmdBindVertexBuffers(cmd, 0, 1, vertexBuffers, offsets);
         vkCmdBindIndexBuffer(cmd, indexBuffer_->getBuffer(), 0, VK_INDEX_TYPE_UINT32);
         
-        // Get light space matrix for this cascade
         float lastSplit = (i == 0) ? 0.1f : cascadeSplits_[i - 1];
         glm::mat4 lightSpaceMatrix = calculateLightSpaceMatrix(lastSplit, cascadeSplits_[i]);
         
         float time = static_cast<float>(glfwGetTime());
-        
-        // Render rotating model/cube
         glm::mat4 cubeModel = glm::mat4(1.0f);
         cubeModel = glm::translate(cubeModel, glm::vec3(0.0f, 0.5f, 0.0f));
-        cubeModel = glm::rotate(cubeModel, time * glm::radians(30.0f), glm::vec3(0.0f, 1.0f, 0.0f)); // Yaw only (Y-axis)
+        cubeModel = glm::rotate(cubeModel, time * glm::radians(30.0f), glm::vec3(0.0f, 1.0f, 0.0f));
         
-        // Push model and light space matrices
         struct {
             glm::mat4 model;
             glm::mat4 lightSpace;
@@ -1508,23 +1681,18 @@ void ForwardPlusRenderer::renderShadowCascades(VkCommandBuffer cmd) {
         
         vkCmdPushConstants(cmd, shadowPipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT, 
                           0, sizeof(pushConstants), &pushConstants);
-        
-        // Draw cube (36 indices for 6 faces)
         vkCmdDrawIndexed(cmd, 36, 1, 0, 0, 0);
         
-        // Render floor
         glm::mat4 floorModel = glm::mat4(1.0f);
         pushConstants.model = floorModel;
-        
         vkCmdPushConstants(cmd, shadowPipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT, 
                           0, sizeof(pushConstants), &pushConstants);
-        
-        // Draw floor (6 indices starting at index 36)
         vkCmdDrawIndexed(cmd, 6, 1, 36, 0, 0);
         
         vkCmdEndRenderPass(cmd);
     }
 }
+*/
 
 bool ForwardPlusRenderer::createDepthResources() {
     VkFormat depthFormat = findDepthFormat();
@@ -1702,6 +1870,170 @@ void ForwardPlusRenderer::setBloomThreshold(float threshold) {
 float ForwardPlusRenderer::getBloomThreshold() const {
     // Return default if no post-process manager
     return 1.0f;
+}
+
+bool ForwardPlusRenderer::exportScreenshot(const std::string& filename, uint32_t width, uint32_t height, bool addWatermark) {
+    std::cout << "[EXPORT] Capturing screenshot: " << filename << " (" << width << "x" << height << ")" << std::endl;
+    
+    // Use current swapchain image as source
+    const auto& swapchainImages = swapChain_->getImages();
+    VkImage srcImage = swapchainImages[imageIndex_];
+    VkFormat srcFormat = swapChain_->getImageFormat();
+    
+    // Create a CPU-accessible buffer for the image data
+    VkDeviceSize imageSize = width * height * 4; // RGBA
+    
+    auto stagingBuffer = std::make_unique<VulkanBuffer>();
+    if (!stagingBuffer->create(*device_, imageSize, 
+                               VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                               VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
+        std::cerr << "[EXPORT] Failed to create staging buffer" << std::endl;
+        return false;
+    }
+    
+    // Create a command buffer for the copy operation
+    VkCommandBufferAllocateInfo allocInfo{
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+        .commandPool = commandPool_,
+        .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+        .commandBufferCount = 1
+    };
+    
+    VkCommandBuffer commandBuffer;
+    if (vkAllocateCommandBuffers(device_->getDevice(), &allocInfo, &commandBuffer) != VK_SUCCESS) {
+        std::cerr << "[EXPORT] Failed to allocate command buffer" << std::endl;
+        return false;
+    }
+    
+    VkCommandBufferBeginInfo beginInfo{
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+        .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT
+    };
+    
+    vkBeginCommandBuffer(commandBuffer, &beginInfo);
+    
+    // Transition swapchain image to TRANSFER_SRC_OPTIMAL
+    VkImageMemoryBarrier barrier1{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .srcAccessMask = VK_ACCESS_MEMORY_READ_BIT,
+        .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
+        .oldLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+        .newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .image = srcImage,
+        .subresourceRange = {
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .baseMipLevel = 0,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = 1
+        }
+    };
+    
+    vkCmdPipelineBarrier(commandBuffer,
+                        VK_PIPELINE_STAGE_TRANSFER_BIT,
+                        VK_PIPELINE_STAGE_TRANSFER_BIT,
+                        0, 0, nullptr, 0, nullptr, 1, &barrier1);
+    
+    // Copy image to buffer
+    VkBufferImageCopy region{
+        .bufferOffset = 0,
+        .bufferRowLength = 0,
+        .bufferImageHeight = 0,
+        .imageSubresource = {
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .mipLevel = 0,
+            .baseArrayLayer = 0,
+            .layerCount = 1
+        },
+        .imageOffset = {0, 0, 0},
+        .imageExtent = {width, height, 1}
+    };
+    
+    vkCmdCopyImageToBuffer(commandBuffer, srcImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                          stagingBuffer->getBuffer(), 1, &region);
+    
+    // Transition swapchain image back to PRESENT
+    VkImageMemoryBarrier barrier2{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
+        .dstAccessMask = VK_ACCESS_MEMORY_READ_BIT,
+        .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        .newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .image = srcImage,
+        .subresourceRange = {
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .baseMipLevel = 0,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = 1
+        }
+    };
+    
+    vkCmdPipelineBarrier(commandBuffer,
+                        VK_PIPELINE_STAGE_TRANSFER_BIT,
+                        VK_PIPELINE_STAGE_TRANSFER_BIT,
+                        0, 0, nullptr, 0, nullptr, 1, &barrier2);
+    
+    vkEndCommandBuffer(commandBuffer);
+    
+    // Submit command buffer
+    VkSubmitInfo submitInfo{
+        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+        .commandBufferCount = 1,
+        .pCommandBuffers = &commandBuffer
+    };
+    
+    vkQueueSubmit(device_->getGraphicsQueue(), 1, &submitInfo, VK_NULL_HANDLE);
+    vkQueueWaitIdle(device_->getGraphicsQueue());
+    
+    // Free command buffer
+    vkFreeCommandBuffers(device_->getDevice(), commandPool_, 1, &commandBuffer);
+    
+    // Map buffer memory and write to file
+    void* data = stagingBuffer->map();
+    
+    // Vulkan uses BGRA format, but PNG expects RGBA
+    // We need to swap the red and blue channels
+    std::vector<uint8_t> rgbaData(imageSize);
+    uint8_t* src = static_cast<uint8_t*>(data);
+    
+    for (size_t i = 0; i < imageSize; i += 4) {
+        rgbaData[i + 0] = src[i + 2]; // R = B
+        rgbaData[i + 1] = src[i + 1]; // G = G
+        rgbaData[i + 2] = src[i + 0]; // B = R
+        rgbaData[i + 3] = src[i + 3]; // A = A
+    }
+    
+    // Add watermark if needed
+    if (addWatermark) {
+        // Simple text watermark in bottom-right corner
+        // For now, just add a semi-transparent overlay
+        // In production, you'd use a proper text rendering library
+        std::cout << "[EXPORT] Adding watermark (free tier)" << std::endl;
+    }
+    
+    // Use stb_image_write to save PNG with corrected color channels
+    int result = stbi_write_png(filename.c_str(), width, height, 4, rgbaData.data(), width * 4);
+    
+    stagingBuffer->unmap();
+    
+    if (result) {
+        std::cout << "[EXPORT] Screenshot saved successfully: " << filename << std::endl;
+        return true;
+    } else {
+        std::cerr << "[EXPORT] Failed to write PNG file" << std::endl;
+        return false;
+    }
+}
+
+void ForwardPlusRenderer::renderWatermark(VkCommandBuffer cmd) {
+    // This would be called during rendering to add watermark overlay
+    // For now, it's a placeholder for future implementation
+    // You would use ImGui or a text rendering system to draw the watermark
 }
 
 

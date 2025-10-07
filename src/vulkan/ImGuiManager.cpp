@@ -231,7 +231,7 @@ void ImGuiManager::renderMaterialPanel() {
         controls_.roughness = 0.5f;
         controls_.metallic = 0.0f;
         controls_.ambientStrength = 0.001f;
-        controls_.lightIntensity = 0.1f;   // Updated to current level
+        controls_.lightIntensity = 8.0f;   // Match renderer default
         controls_.lightYaw = 225.0f;
         controls_.lightPitch = 45.0f;
         controls_.emissiveR = 0.549f;      // Red emissive
@@ -266,6 +266,30 @@ void ImGuiManager::renderFPSCounter() {
     // Display FPS with larger font
     ImGui::Text("FPS: %.1f", io.Framerate);
     ImGui::Text("%.2f ms", 1000.0f / io.Framerate);
+    
+    ImGui::End();
+}
+
+void ImGuiManager::renderShadowPanel() {
+    ImGui::SetNextWindowPos(ImVec2(370, 570), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(350, 120), ImGuiCond_FirstUseEver);
+    
+    ImGui::Begin("Shadow Settings", nullptr);
+    
+    bool changed = false;
+    
+    ImGui::Text("Shadow Bias Control");
+    ImGui::Spacing();
+    
+    // Depth bias constant slider - wide range for adjustment
+    ImGui::Text("Depth Bias Constant");
+    if (ImGui::DragFloat("##DepthBias", &shadowControls_.depthBiasConstant, 0.0001f, 0.0f, 0.1f, "%.4f")) {
+        changed = true;
+    }
+    
+    if (changed) {
+        shadowControls_.valuesChanged = true;
+    }
     
     ImGui::End();
 }

@@ -17,6 +17,7 @@ public:
     [[nodiscard]] VkFormat getImageFormat() const noexcept { return imageFormat_; }
     [[nodiscard]] VkExtent2D getExtent() const noexcept { return extent_; }
     [[nodiscard]] const std::vector<VkImageView>& getImageViews() const noexcept { return imageViews_; }
+    [[nodiscard]] const std::vector<VkImage>& getImages() const noexcept { return images_; }
 
     uint32_t acquireNextImage(VkSemaphore semaphore);
     void present(uint32_t imageIndex, VkSemaphore waitSemaphore);

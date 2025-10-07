@@ -18,6 +18,7 @@ InputManager::InputManager()
     , materialKeyPressed(false)
     , raytracingKeyPressed(false)
     , shadowDebugKeyPressed(false)
+    , screenshotKeyPressed(false)
     , cameraFreezeKeyPressed(false)
     , cameraFrozen(false)
     , fpsModeKeyPressed(false)
@@ -124,6 +125,18 @@ bool InputManager::shouldToggleShadowDebug(GLFWwindow* window) {
     }
     if (glfwGetKey(window, GLFW_KEY_B) == GLFW_RELEASE) {
         shadowDebugKeyPressed = false;
+    }
+    return false;
+}
+
+bool InputManager::shouldTakeScreenshot(GLFWwindow* window) {
+    if (glfwGetKey(window, GLFW_KEY_F12) == GLFW_PRESS && !screenshotKeyPressed) {
+        screenshotKeyPressed = true;
+        std::cout << "[SCREENSHOT] F12 pressed - capturing screenshot" << std::endl;
+        return true;
+    }
+    if (glfwGetKey(window, GLFW_KEY_F12) == GLFW_RELEASE) {
+        screenshotKeyPressed = false;
     }
     return false;
 }

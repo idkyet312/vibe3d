@@ -85,12 +85,21 @@ struct CameraUBO {
 };
 
 struct ShadowUBO {
-    alignas(16) glm::mat4 lightSpaceMatrices[4]; // 4 cascades
-    alignas(16) glm::vec4 cascadeSplits; // x, y, z = split distances, w = num cascades
+    alignas(16) glm::mat4 lightSpaceMatrix; // Single light space matrix
+    alignas(16) glm::vec4 cascadeSplits; // Kept for compatibility (unused)
     alignas(16) glm::vec3 lightDirection;
-    alignas(4) float receiverBiasMultiplier; // NEW: for shader-side bias
-    alignas(16) glm::vec4 cascadeBiasValues; // NEW: x=cascade0, y=cascade1, z=cascade2, w=cascade3
+    alignas(4) float depthBiasConstant; // Simple depth bias
+    alignas(16) glm::vec4 cascadeBiasValues; // Kept for compatibility (unused)
 };
+
+// BACKUP: Cascaded shadow UBO (disabled)
+// struct ShadowUBO {
+//     alignas(16) glm::mat4 lightSpaceMatrices[4]; // 4 cascades
+//     alignas(16) glm::vec4 cascadeSplits;
+//     alignas(16) glm::vec3 lightDirection;
+//     alignas(4) float receiverBiasMultiplier;
+//     alignas(16) glm::vec4 cascadeBiasValues;
+// };
 
 struct ModelUBO {
     alignas(16) glm::mat4 model;

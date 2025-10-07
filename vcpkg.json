@@ -8,6 +8,7 @@
         "glad",
         "nlohmann-json",
         "tinygltf",
+        "stb",
         {
             "name": "imgui",
             "features": ["glfw-binding", "vulkan-binding"]

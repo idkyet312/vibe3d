@@ -26,6 +26,7 @@ public:
     bool shouldCycleMaterial(GLFWwindow* window);
     bool shouldToggleRaytracing(GLFWwindow* window);
     bool shouldToggleShadowDebug(GLFWwindow* window);
+    bool shouldTakeScreenshot(GLFWwindow* window);
     bool shouldIncreaseExposure(GLFWwindow* window) const;
     bool shouldDecreaseExposure(GLFWwindow* window) const;
     bool shouldExit(GLFWwindow* window) const;
@@ -60,6 +61,7 @@ private:
     bool materialKeyPressed;
     bool raytracingKeyPressed;
     bool shadowDebugKeyPressed;
+    bool screenshotKeyPressed;
     bool cameraFreezeKeyPressed;
     bool cameraFrozen;
     bool fpsModeKeyPressed;

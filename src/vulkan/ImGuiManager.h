@@ -34,7 +34,7 @@ public:
         float roughness = 0.5f;
         float metallic = 0.0f;
         float ambientStrength = 0.001f;
-        float lightIntensity = 0.1f;  // Updated to current level (was 0.4)
+        float lightIntensity = 8.0f;  // Match ForwardPlusRenderer default
         float lightYaw = 225.0f;
         float lightPitch = 45.0f;
         float emissiveR = 0.549f;  // Red emissive color
@@ -61,6 +61,15 @@ public:
     BloomControls& getBloomControls() { return bloomControls_; }
     void renderBloomPanel();
     
+    // Shadow controls
+    struct ShadowControls {
+        float depthBiasConstant = 0.005f;  // Simple depth bias
+        bool valuesChanged = false;
+    };
+    
+    ShadowControls& getShadowControls() { return shadowControls_; }
+    void renderShadowPanel();
+    
     // Config save/load (persists to disk)
     void saveConfig(int slot); // slot 0-2
     void loadConfig(int slot);
@@ -75,6 +84,7 @@ private:
     bool initialized_ = false;
     MaterialControls controls_;
     BloomControls bloomControls_;
+    ShadowControls shadowControls_;
     
     // Saved config slots
     struct SavedConfig {
