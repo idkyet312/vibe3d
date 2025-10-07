@@ -37,9 +37,13 @@ public:
 private:
     VulkanDevice& device_;
     
-    // Helper functions for GLB loading
+    // Helper functions for model loading
     bool loadGLBModel(const std::string& filepath, 
                      std::vector<Vertex>& vertices, 
+                     std::vector<uint32_t>& indices);
+    
+    bool loadOBJModel(const std::string& filepath,
+                     std::vector<Vertex>& vertices,
                      std::vector<uint32_t>& indices);
 };
 

@@ -672,9 +672,12 @@ bool ForwardPlusRenderer::createPipeline() {
         .depthClampEnable = VK_FALSE,
         .rasterizerDiscardEnable = VK_FALSE,
         .polygonMode = VK_POLYGON_MODE_FILL,
-        .cullMode = VK_CULL_MODE_BACK_BIT,
+        .cullMode = VK_CULL_MODE_NONE,  // Disable culling to show all faces
         .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
-        .depthBiasEnable = VK_FALSE,
+        .depthBiasEnable = VK_TRUE,
+        .depthBiasConstantFactor = 1.0f,  // Small offset to prevent z-fighting
+        .depthBiasClamp = 0.0f,
+        .depthBiasSlopeFactor = 1.0f,
         .lineWidth = 1.0f
     };
     
@@ -830,7 +833,7 @@ bool ForwardPlusRenderer::createShadowPipeline() {
         .depthClampEnable = VK_FALSE,
         .rasterizerDiscardEnable = VK_FALSE,
         .polygonMode = VK_POLYGON_MODE_FILL,
-        .cullMode = VK_CULL_MODE_BACK_BIT,  // Standard back-face culling
+        .cullMode = VK_CULL_MODE_NONE,  // Disable culling to show all faces
         .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
         .depthBiasEnable = VK_TRUE,
         .depthBiasConstantFactor = 2.0f,  // Moderate constant bias
@@ -951,19 +954,21 @@ bool ForwardPlusRenderer::createCubeGeometry() {
     vertexBuffer_ = std::make_unique<VulkanBuffer>();
     indexBuffer_ = std::make_unique<VulkanBuffer>();
     
-    // Try to load a model file first, fall back to cube if not found
-    const std::string modelPath = "model.glb";
+    // Try to load a model file (check multiple formats)
+    std::vector<std::string> modelPaths = {"model.obj", "model.glb", "model.gltf"};
     
-    // Check if model file exists
-    std::ifstream modelFile(modelPath);
-    if (modelFile.good()) {
-        modelFile.close();
-        std::cout << "Loading model from: " << modelPath << std::endl;
-        return geometryManager_->loadModelGeometry(modelPath, *vertexBuffer_, *indexBuffer_, indexCount_);
-    } else {
-        std::cout << "No model.glb found, using default cube" << std::endl;
-        return geometryManager_->createCubeGeometry(*vertexBuffer_, *indexBuffer_, indexCount_);
+    for (const auto& modelPath : modelPaths) {
+        std::ifstream modelFile(modelPath);
+        if (modelFile.good()) {
+            modelFile.close();
+            std::cout << "Loading model from: " << modelPath << std::endl;
+            return geometryManager_->loadModelGeometry(modelPath, *vertexBuffer_, *indexBuffer_, indexCount_);
+        }
     }
+    
+    // Fall back to default cube if no model found
+    std::cout << "No model file found (tried .obj, .glb, .gltf), using default cube" << std::endl;
+    return geometryManager_->createCubeGeometry(*vertexBuffer_, *indexBuffer_, indexCount_);
 }
 
 bool ForwardPlusRenderer::createSyncObjects() {
@@ -1162,8 +1167,10 @@ void ForwardPlusRenderer::renderScene(const CameraUBO& camera, std::span<const P
                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 
                       0, sizeof(PushConstants), &pushConst);
     
-    // Draw cube (36 indices for 6 faces)
-    vkCmdDrawIndexed(cmd, 36, 1, 0, 0, 0);
+    // Draw model (use actual index count from loaded geometry)
+    // Model indices come first, floor indices are at the end
+    uint32_t modelIndexCount = indexCount_ - 6; // Subtract floor indices
+    vkCmdDrawIndexed(cmd, modelIndexCount, 1, 0, 0, 0);
     
     // Draw stationary floor
     glm::mat4 floorModel = glm::mat4(1.0f); // Identity - no transformation
@@ -1175,8 +1182,8 @@ void ForwardPlusRenderer::renderScene(const CameraUBO& camera, std::span<const P
                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 
                       0, sizeof(PushConstants), &pushConst);
     
-    // Draw floor (6 indices starting at index 36)
-    vkCmdDrawIndexed(cmd, 6, 1, 36, 0, 0);
+    // Draw floor (6 indices starting after model indices)
+    vkCmdDrawIndexed(cmd, 6, 1, modelIndexCount, 0, 0);
     
     vkCmdEndRenderPass(cmd);
     
@@ -1616,8 +1623,9 @@ void ForwardPlusRenderer::renderShadowMap(VkCommandBuffer cmd) {
     vkCmdPushConstants(cmd, shadowPipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT, 
                       0, sizeof(pushConstants), &pushConstants);
     
-    // Draw cube (36 indices for 6 faces)
-    vkCmdDrawIndexed(cmd, 36, 1, 0, 0, 0);
+    // Draw model (use actual index count, excluding floor)
+    uint32_t modelIndexCount = indexCount_ - 6;
+    vkCmdDrawIndexed(cmd, modelIndexCount, 1, 0, 0, 0);
     
     // Render floor
     glm::mat4 floorModel = glm::mat4(1.0f);
@@ -1626,8 +1634,8 @@ void ForwardPlusRenderer::renderShadowMap(VkCommandBuffer cmd) {
     vkCmdPushConstants(cmd, shadowPipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT, 
                       0, sizeof(pushConstants), &pushConstants);
     
-    // Draw floor (6 indices starting at index 36)
-    vkCmdDrawIndexed(cmd, 6, 1, 36, 0, 0);
+    // Draw floor (6 indices starting after model indices)
+    vkCmdDrawIndexed(cmd, 6, 1, modelIndexCount, 0, 0);
     
     vkCmdEndRenderPass(cmd);
 }
@@ -1679,15 +1687,17 @@ void ForwardPlusRenderer::renderShadowCascades(VkCommandBuffer cmd) {
         pushConstants.model = cubeModel;
         pushConstants.lightSpace = lightSpaceMatrix;
         
+        uint32_t modelIndexCount = indexCount_ - 6;
+        
         vkCmdPushConstants(cmd, shadowPipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT, 
                           0, sizeof(pushConstants), &pushConstants);
-        vkCmdDrawIndexed(cmd, 36, 1, 0, 0, 0);
+        vkCmdDrawIndexed(cmd, modelIndexCount, 1, 0, 0, 0);
         
         glm::mat4 floorModel = glm::mat4(1.0f);
         pushConstants.model = floorModel;
         vkCmdPushConstants(cmd, shadowPipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT, 
                           0, sizeof(pushConstants), &pushConstants);
-        vkCmdDrawIndexed(cmd, 6, 1, 36, 0, 0);
+        vkCmdDrawIndexed(cmd, 6, 1, modelIndexCount, 0, 0);
         
         vkCmdEndRenderPass(cmd);
     }

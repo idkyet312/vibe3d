@@ -7,8 +7,12 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <tiny_gltf.h>
 
+#define TINYOBJLOADER_IMPLEMENTATION
+#include <tiny_obj_loader.h>
+
 #include <iostream>
 #include <algorithm>
+#include <unordered_map>
 
 namespace vibe::vk {
 
@@ -112,7 +116,24 @@ bool GeometryManager::loadModelGeometry(const std::string& filepath,
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices;
     
-    if (!loadGLBModel(filepath, vertices, indices)) {
+    // Determine file type by extension
+    auto hasExtension = [](const std::string& str, const std::string& ext) {
+        if (str.length() < ext.length()) return false;
+        return str.compare(str.length() - ext.length(), ext.length(), ext) == 0;
+    };
+    
+    bool loadSuccess = false;
+    if (hasExtension(filepath, ".obj") || hasExtension(filepath, ".OBJ")) {
+        loadSuccess = loadOBJModel(filepath, vertices, indices);
+    } else if (hasExtension(filepath, ".glb") || hasExtension(filepath, ".GLB") || 
+               hasExtension(filepath, ".gltf") || hasExtension(filepath, ".GLTF")) {
+        loadSuccess = loadGLBModel(filepath, vertices, indices);
+    } else {
+        std::cerr << "Unsupported file format: " << filepath << std::endl;
+        return false;
+    }
+    
+    if (!loadSuccess) {
         std::cerr << "Failed to load model: " << filepath << std::endl;
         return false;
     }
@@ -313,6 +334,112 @@ bool GeometryManager::loadGLBModel(const std::string& filepath,
             }
         }
     }
+    
+    return !vertices.empty();
+}
+
+bool GeometryManager::loadOBJModel(const std::string& filepath,
+                                  std::vector<Vertex>& vertices,
+                                  std::vector<uint32_t>& indices) {
+    tinyobj::attrib_t attrib;
+    std::vector<tinyobj::shape_t> shapes;
+    std::vector<tinyobj::material_t> materials;
+    std::string warn, err;
+    
+    // Get directory from filepath for material loading
+    std::string directory;
+    size_t lastSlash = filepath.find_last_of("/\\");
+    if (lastSlash != std::string::npos) {
+        directory = filepath.substr(0, lastSlash + 1);
+    }
+    
+    if (!tinyobj::LoadObj(&attrib, &shapes, &materials, &warn, &err, filepath.c_str(), directory.c_str())) {
+        if (!warn.empty()) {
+            std::cout << "OBJ Warning: " << warn << std::endl;
+        }
+        if (!err.empty()) {
+            std::cerr << "OBJ Error: " << err << std::endl;
+        }
+        return false;
+    }
+    
+    if (!warn.empty()) {
+        std::cout << "OBJ Warning: " << warn << std::endl;
+    }
+    
+    // Use a hash map to deduplicate vertices
+    std::unordered_map<std::string, uint32_t> uniqueVertices;
+    
+    // Process all shapes in the OBJ file
+    for (const auto& shape : shapes) {
+        for (const auto& index : shape.mesh.indices) {
+            Vertex vertex{};
+            
+            // Position (required)
+            if (index.vertex_index >= 0) {
+                // Load position directly without coordinate conversion
+                // Assume OBJ is already in correct coordinate system or let user export correctly
+                vertex.position = glm::vec3(
+                    attrib.vertices[3 * size_t(index.vertex_index) + 0],
+                    attrib.vertices[3 * size_t(index.vertex_index) + 1],
+                    attrib.vertices[3 * size_t(index.vertex_index) + 2]
+                );
+            }
+            
+            // Normal (optional)
+            if (index.normal_index >= 0 && !attrib.normals.empty()) {
+                // Load normals directly
+                vertex.normal = glm::vec3(
+                    attrib.normals[3 * size_t(index.normal_index) + 0],
+                    attrib.normals[3 * size_t(index.normal_index) + 1],
+                    attrib.normals[3 * size_t(index.normal_index) + 2]
+                );
+            } else {
+                // Default normal pointing up
+                vertex.normal = glm::vec3(0.0f, 1.0f, 0.0f);
+            }
+            
+            // Texture coordinates (optional)
+            if (index.texcoord_index >= 0 && !attrib.texcoords.empty()) {
+                vertex.texCoord = glm::vec2(
+                    attrib.texcoords[2 * size_t(index.texcoord_index) + 0],
+                    1.0f - attrib.texcoords[2 * size_t(index.texcoord_index) + 1]  // Flip V coordinate
+                );
+            } else {
+                vertex.texCoord = glm::vec2(0.0f, 0.0f);
+            }
+            
+            // Default vertex color (OBJ typically doesn't have per-vertex colors)
+            vertex.color = glm::vec3(0.8f, 0.8f, 0.8f);
+            
+            // Create a unique key for this vertex
+            std::string key = std::to_string(vertex.position.x) + "_" +
+                            std::to_string(vertex.position.y) + "_" +
+                            std::to_string(vertex.position.z) + "_" +
+                            std::to_string(vertex.normal.x) + "_" +
+                            std::to_string(vertex.normal.y) + "_" +
+                            std::to_string(vertex.normal.z) + "_" +
+                            std::to_string(vertex.texCoord.x) + "_" +
+                            std::to_string(vertex.texCoord.y);
+            
+            // Check if we've seen this vertex before
+            auto it = uniqueVertices.find(key);
+            if (it != uniqueVertices.end()) {
+                // Reuse existing vertex
+                indices.push_back(it->second);
+            } else {
+                // Add new vertex
+                uint32_t newIndex = static_cast<uint32_t>(vertices.size());
+                vertices.push_back(vertex);
+                uniqueVertices[key] = newIndex;
+                indices.push_back(newIndex);
+            }
+        }
+    }
+    
+    std::cout << "OBJ Loaded: " << shapes.size() << " shapes, " 
+              << vertices.size() << " unique vertices, " 
+              << indices.size() << " indices" << std::endl;
     
     return !vertices.empty();
 }
