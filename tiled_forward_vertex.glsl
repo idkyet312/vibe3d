@@ -8,10 +8,20 @@ out vec3 FragPos;
 out vec3 Normal;
 out vec2 TexCoord;
 out vec4 FragPosScreen;
+out vec4 FragPosLightSpace;
 
 uniform mat4 model;
 uniform mat4 view;
 uniform mat4 projection;
+
+// Shadow uniform buffer (binding 1 matches C++ descriptor layout)
+layout(std140, binding = 1) uniform ShadowUBO {
+    mat4 lightSpaceMatrix;
+    vec4 cascadeSplits; // unused
+    vec3 lightDirection;
+    float depthBiasConstant;
+    vec4 cascadeBiasValues; // unused
+} shadow;
 
 void main()
 {
@@ -22,4 +32,7 @@ void main()
     
     gl_Position = projection * view * worldPos;
     FragPosScreen = gl_Position;
+    
+    // Calculate fragment position in light space for shadows
+    FragPosLightSpace = shadow.lightSpaceMatrix * worldPos;
 }
